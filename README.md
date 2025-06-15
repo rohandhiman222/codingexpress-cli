@@ -12,8 +12,6 @@ To use Coding Express CLI, install it globally via npm:
 npm i codingexpress-cli
 ```
 
-Replace `Coding Express-cli` with the actual package name if you've published it to npm, or use `npm install -g .` in the project directory after setting up the `package.json`.
-
 ---
 
 ## Usage
