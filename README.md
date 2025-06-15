@@ -1,18 +1,18 @@
-# Expresso CLI - A Laravel-like Scaffolding Tool for Express.js
+# Coding Express CLI - A Laravel-like Scaffolding Tool for Express.js
 
-Expresso CLI is a command-line tool designed to simplify and accelerate the development of Express.js applications by providing a Laravel-inspired scaffolding experience. It automates project setup, dependency installation, authentication scaffolding, and generates boilerplate code for controllers, models, routes, and validators.
+Coding Express CLI is a command-line tool designed to simplify and accelerate the development of Express.js applications by providing a Laravel-inspired scaffolding experience. It automates project setup, dependency installation, authentication scaffolding, and generates boilerplate code for controllers, models, routes, and validators.
 
 ---
 
 ## Installation
 
-To use Expresso CLI, install it globally via npm:
+To use Coding Express CLI, install it globally via npm:
 
 ```bash
-npm install -g expresso-cli
+npm i codingexpress-cli
 ```
 
-Replace `expresso-cli` with the actual package name if you've published it to npm, or use `npm install -g .` in the project directory after setting up the `package.json`.
+Replace `Coding Express-cli` with the actual package name if you've published it to npm, or use `npm install -g .` in the project directory after setting up the `package.json`.
 
 ---
 
@@ -22,7 +22,7 @@ Replace `expresso-cli` with the actual package name if you've published it to np
 codingexpress <command> [options]
 ```
 
-Expresso CLI provides commands to initialize projects and generate boilerplate code for various components.
+Coding Express CLI provides commands to initialize projects and generate boilerplate code for various components.
 
 ---
 
@@ -116,7 +116,7 @@ Running `codingexpress init` sets up the following directory structure:
 
 ## Authentication System
 
-Expresso CLI scaffolds a robust JWT-based authentication system with support for:
+Coding Express CLI scaffolds a robust JWT-based authentication system with support for:
 
 - Email or phone-based registration and login.
 - OTP-based login and password reset.
@@ -389,7 +389,7 @@ Authorization: Bearer <your_jwt_token_here>
 
 ## Resource API Endpoints (Example: Products)
 
-When you run `codingexpress make:controller ProductController`, `codingexpress make:model Product`, and `codingexpress make:route product`, Expresso CLI generates RESTful endpoints for resources. Below is an example for a `Product` resource, accessible at `/api/products`.
+When you run `codingexpress make:controller ProductController`, `codingexpress make:model Product`, and `codingexpress make:route product`, Coding Express CLI generates RESTful endpoints for resources. Below is an example for a `Product` resource, accessible at `/api/products`.
 
 ### 1. Get All Products (Paginated)
 
@@ -578,7 +578,7 @@ CORS_ORIGIN=*
 
 ## Postman Collection
 
-Expresso CLI generates a Postman collection (`<appName>.postman_collection.json`) with pre-configured requests for all authentication and sample resource endpoints. Import it into Postman and set the `baseUrl` variable (default: `http://localhost:3000`).
+Coding Express CLI generates a Postman collection (`<appName>.postman_collection.json`) with pre-configured requests for all authentication and sample resource endpoints. Import it into Postman and set the `baseUrl` variable (default: `http://localhost:3000`).
 
 **Features**:
 
@@ -599,10 +599,10 @@ Expresso CLI generates a Postman collection (`<appName>.postman_collection.json`
 
 ## Example Workflow
 
-1. Install Expresso CLI globally:
+1. Install Coding Express CLI globally:
 
 ```bash
-npm install -g expresso-cli
+npm i codingexpress-cli
 ```
 
 2. Initialize a new project:
@@ -639,4 +639,4 @@ router.use("/products", productRoutes);
 - Run `npm audit fix` if vulnerabilities are reported during initialization.
 - Customize validators (`app/validators/*.js`) and schemas (`app/models/*.js`) as needed.
 
-Expresso CLI streamlines Express.js development with a structured, secure, and scalable foundation. Happy coding!
+Coding Express CLI streamlines Express.js development with a structured, secure, and scalable foundation. Happy coding!
