@@ -5,6 +5,8 @@
 // 1. Install globally: npm install -g . (after setting up package.json)
 // 2. Initialize project: codingexpress init
 // 3. Create a controller: codingexpress make:controller ProductController
+// 4. Create multiple controllers: codingexpress make:controller product order payment
+// 5. Create a full resource: codingexpress make:resource Product
 
 const fs = require("fs");
 const path = require("path");
@@ -33,35 +35,70 @@ switch (action) {
     break;
 
   case "make":
-    const type = feature; // e.g., 'controller', 'model'
-    const name = args[1];
-    if (!type || !name) {
+    const type = feature; // e.g., 'controller', 'model', 'resource'
+    const allArgs = args.slice(1);
+    const options = parseArgs(allArgs);
+    const names = allArgs.filter((arg) => !arg.startsWith("--"));
+
+    if (!type || names.length === 0) {
       console.error(
-        "Error: Please provide the type (controller, model, route) and a name."
+        "Error: Please provide the type (controller, model, route, resource) and at least one name."
       );
       displayHelp();
       process.exit(1);
     }
 
-    const sanitizedName = name.replace(/[^a-zA-Z0-9]/g, "");
-    if (!sanitizedName) {
-      console.error("Error: The provided name is invalid.");
-      process.exit(1);
-    }
-
-    const options = parseArgs(args.slice(2));
+    // Helper to sanitize and capitalize names consistently
+    const processName = (name) => {
+      const sanitized = name.replace(/[^a-zA-Z0-9]/g, "");
+      if (!sanitized) {
+        console.error(`Error: The provided name '${name}' is invalid.`);
+        return null;
+      }
+      // Return capitalized name, e.g., 'product' -> 'Product'
+      return sanitized.charAt(0).toUpperCase() + sanitized.slice(1);
+    };
 
     switch (type) {
       case "controller":
-        createController(sanitizedName);
+        names.forEach((name) => {
+          const capitalizedName = processName(name);
+          if (capitalizedName) {
+            createController(capitalizedName);
+          }
+        });
         break;
+
       case "model":
-        const connectionName = options.connection || "default";
-        createModel(sanitizedName, connectionName);
+        names.forEach((name) => {
+          const capitalizedName = processName(name);
+          if (capitalizedName) {
+            const connectionName = options.connection || "default";
+            createModel(capitalizedName, connectionName);
+          }
+        });
         break;
+
       case "route":
-        createRouteFile(sanitizedName);
+        names.forEach((name) => {
+          const sanitized = name.replace(/[^a-zA-Z0-9-]/g, ""); // Allow hyphens in route names
+          if (sanitized) {
+            createRouteFile(sanitized.toLowerCase());
+          } else {
+            console.error(`Error: The provided name '${name}' is invalid.`);
+          }
+        });
         break;
+
+      case "resource": // Feature 2: make:resource command
+        names.forEach((name) => {
+          const capitalizedName = processName(name);
+          if (capitalizedName) {
+            createResource(capitalizedName, options);
+          }
+        });
+        break;
+
       default:
         console.error(`Error: Unknown type '${type}' for make command.`);
         displayHelp();
@@ -86,6 +123,39 @@ function parseArgs(args) {
     }
   }
   return options;
+}
+
+// --- New Generator Function for Resource ---
+
+/**
+ * Creates a full resource (Model, Validator, Controller, Route).
+ * @param {string} name - The capitalized resource name (e.g., 'Product').
+ * @param {object} options - Command line options (e.g., --connection).
+ */
+function createResource(name, options) {
+  console.log(`\n🚀 Scaffolding resource: ${name}...`);
+
+  // 1. Create Controller (which also creates the validator)
+  // createController expects 'Product', and it will create 'ProductController'
+  createController(name);
+
+  // 2. Create Model
+  const connectionName = options.connection || "default";
+  // createModel expects 'Product'
+  createModel(name, connectionName);
+
+  // 3. Create Route File
+  // createRouteFile expects lowercase name, e.g., 'product'
+  createRouteFile(name.toLowerCase());
+
+  console.log(`✅ Resource '${name}' created successfully!`);
+  console.log(`   - Model:      app/models/${name}.js`);
+  console.log(`   - Validator:  app/validators/${name}Validator.js`);
+  console.log(`   - Controller: app/controllers/${name}Controller.js`);
+  console.log(`   - Routes:     app/routes/${name.toLowerCase()}Routes.js`);
+  console.log(
+    `\n💡 Action Required: Import and use the new route in 'app/routes/index.js'.\n   Example:\n   const ${name.toLowerCase()}Routes = require('./${name.toLowerCase()}Routes.js');\n   router.use('/${name.toLowerCase()}s', ${name.toLowerCase()}Routes);\n`
+  );
 }
 
 // --- Generator Functions ---
@@ -233,7 +303,7 @@ function createController(name) {
   const modelName = name.replace("Controller", "");
   createFile(
     `app/controllers/${name}Controller.js`,
-    getControllerTemplate(name, modelName)
+    getControllerTemplate(`${name}Controller`, modelName)
   );
   createFile(
     `app/validators/${modelName}Validator.js`,
@@ -258,12 +328,12 @@ function createRouteFile(name) {
     getRouteTemplate(name, controllerName)
   );
   console.log(
-    `💡 Remember to import and use the new route file in 'app/routes/index.js' and implement the logic in '${controllerName}.js'.`
+    `💡 Remember to import and use this new route file in 'app/routes/index.js'.`
   );
 }
 
 // --- Template Generators ---
-
+// Unchanged from original script...
 function getPackageJsonTemplate(appName) {
   return JSON.stringify(
     {
@@ -507,6 +577,8 @@ router.get('/', (req, res) => {
 
 router.use('/auth', authRoutes);
 
+// [expresso-cli-hook] - Add new routes here
+
 module.exports = router;
 `;
 }
@@ -693,6 +765,7 @@ module.exports = router;
 `;
 }
 
+// All Auth-related and Postman templates are unchanged...
 function getAuthUserModelTemplate() {
   return `const mongoose = require('mongoose');
 const { Schema } = mongoose;
@@ -1742,20 +1815,30 @@ function displayHelp() {
 Expresso CLI - A Laravel-like tool for Express.js
 
 Usage:
-    codingexpress <command> [options]
+    codingexpress <command> [names...] [options]
 
 Available Commands:
-    init                Initializes a project with auth, dependencies, and starts the server.
-    make:controller <Name>      Creates a new controller and validator in app/controllers and app/validators.
-    make:model <Name>       Creates a new Mongoose model file in app/models.
-    make:route <name>       Creates a new route file in app/routes.
+    init                     Initializes a project with auth, dependencies, and starts the server.
 
-Options for make:model:
-    --connection=<name>         Specifies the database connection from config/database.js. Defaults to 'default'.
+    make:controller <Name...>  Creates new controller(s) and validator(s).
+                               Example: codingexpress make:controller product order
+
+    make:model <Name...>       Creates new Mongoose model(s).
+                               Example: codingexpress make:model Product --connection=secondary
+
+    make:route <name...>       Creates new route file(s).
+                               Example: codingexpress make:route user-profile
+
+    make:resource <Name...>    Creates a model, validator, controller, and route file for a resource.
+                               Example: codingexpress make:resource product payment
+
+Options for make:model & make:resource:
+    --connection=<name>      Specifies the database connection from config/database.js.
+                             Defaults to 'default'.
 
 Example:
     codingexpress init
-    codingexpress make:controller ProductController
-    codingexpress make:model Product --connection=secondary
-    `);
+    codingexpress make:resource product order
+    codingexpress make:model User --connection=secondary
+  `);
 }

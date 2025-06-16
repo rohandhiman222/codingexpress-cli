@@ -1,6 +1,6 @@
 # Coding Express CLI - A Laravel-like Scaffolding Tool for Express.js
 
-Coding Express CLI is a command-line tool designed to simplify and accelerate the development of Express.js applications by providing a Laravel-inspired scaffolding experience. It automates project setup, dependency installation, authentication scaffolding, and generates boilerplate code for controllers, models, routes, and validators.
+Coding Express CLI is a command-line tool designed to simplify and accelerate the development of Express.js applications by providing a Laravel-inspired scaffolding experience. It automates project setup, dependency installation, authentication scaffolding, and generates boilerplate code for controllers, models, routes, validators, and full resources.
 
 ---
 
@@ -9,7 +9,7 @@ Coding Express CLI is a command-line tool designed to simplify and accelerate th
 To use Coding Express CLI, install it globally via npm:
 
 ```bash
-npm i codingexpress-cli
+npm install -g codingexpress-cli
 ```
 
 ---
@@ -17,7 +17,7 @@ npm i codingexpress-cli
 ## Usage
 
 ```bash
-codingexpress <command> [options]
+codingexpress <command> [names...] [options]
 ```
 
 Coding Express CLI provides commands to initialize projects and generate boilerplate code for various components.
@@ -33,8 +33,9 @@ Initializes a new Express.js project with the following features:
 - Creates a structured directory layout (`app/controllers`, `app/models`, `app/routes`, `app/middleware`, `app/validators`, `config`, `public`, `.vscode`).
 - Generates core files: `package.json`, `server.js`, `.env`, `.gitignore`, `.prettierrc`, `.prettierignore`, and VS Code settings.
 - Sets up a Postman collection for API testing.
-- Scaffolds a complete authentication system (JWT-based with email/phone login and OTP support).
+- Scaffolds a complete authentication system (JWT-based with email/phone login, OTP, and refresh tokens).
 - Installs dependencies (`express`, `mongoose`, `jsonwebtoken`, `bcryptjs`, `nodemailer`, `twilio`, `cors`, `express-validator`, `nodemon`, `prettier`).
+- Runs `npm audit` to check for vulnerabilities.
 - Starts the development server with `nodemon`.
 
 **Example**:
@@ -43,21 +44,24 @@ Initializes a new Express.js project with the following features:
 codingexpress init
 ```
 
-### `codingexpress make:controller <Name>`
+### `codingexpress make:controller <Name...>`
 
-Creates a new controller file in `app/controllers` and a corresponding validator file in `app/validators`. The controller includes CRUD methods (`index`, `store`, `show`, `update`, `destroy`) with pagination support for the `index` method.
+Creates one or more controller files in `app/controllers` and corresponding validator files in `app/validators`. Each controller includes CRUD methods (`index`, `store`, `show`, `update`, `destroy`) with pagination support for the `index` method.
 
 **Example**:
 
 ```bash
-codingexpress make:controller ProductController
+codingexpress make:controller Product Order
 ```
 
-This creates `app/controllers/ProductController.js` and `app/validators/ProductValidator.js`.
+This creates:
 
-### `codingexpress make:model <Name>`
+- `app/controllers/ProductController.js` and `app/validators/ProductValidator.js`
+- `app/controllers/OrderController.js` and `app/validators/OrderValidator.js`
 
-Creates a new Mongoose model file in `app/models` with a basic schema. Supports multiple database connections via the `--connection` option.
+### `codingexpress make:model <Name...>`
+
+Creates one or more Mongoose model files in `app/models` with a basic schema. Supports multiple database connections via the `--connection` option.
 
 **Options**:
 
@@ -66,22 +70,57 @@ Creates a new Mongoose model file in `app/models` with a basic schema. Supports 
 **Example**:
 
 ```bash
-codingexpress make:model Product --connection=secondary
+codingexpress make:model Product Order --connection=secondary
 ```
 
-This creates `app/models/Product.js` configured for the `secondary` database connection.
+This creates:
 
-### `codingexpress make:route <name>`
+- `app/models/Product.js` and `app/models/Order.js`, both configured for the `secondary` database connection.
 
-Creates a new route file in `app/routes` with RESTful routes (`GET /`, `POST /`, `GET /:id`, `PUT /:id`, `DELETE /:id`) linked to the corresponding controller and validator. Routes are protected by authentication middleware.
+### `codingexpress make:route <name...>`
+
+Creates one or more route files in `app/routes` with RESTful routes (`GET /`, `POST /`, `GET /:id`, `PUT /:id`, `DELETE /:id`) linked to the corresponding controller and validator. Routes are protected by authentication middleware.
 
 **Example**:
 
 ```bash
-codingexpress make:route product
+codingexpress make:route product order
 ```
 
-This creates `app/routes/productRoutes.js`. You must manually import and use the route in `app/routes/index.js`.
+This creates:
+
+- `app/routes/productRoutes.js`
+- `app/routes/orderRoutes.js`
+
+**Note**: Manually import and use the route in `app/routes/index.js`, e.g.:
+
+```javascript
+const productRoutes = require("./productRoutes");
+router.use("/products", productRoutes);
+```
+
+### `codingexpress make:resource <Name...>`
+
+Creates a full resource, including a model, validator, controller, and route file for each specified name. Supports the `--connection` option for model database configuration.
+
+**Options**:
+
+- `--connection=<name>`: Specifies the database connection for the model. Defaults to `'default'`.
+
+**Example**:
+
+```bash
+codingexpress make:resource Product Order --connection=secondary
+```
+
+This creates:
+
+- `app/models/Product.js` and `app/models/Order.js` (using `secondary` connection)
+- `app/validators/ProductValidator.js` and `app/validators/OrderValidator.js`
+- `app/controllers/ProductController.js` and `app/controllers/OrderController.js`
+- `app/routes/productRoutes.js` and `app/routes/orderRoutes.js`
+
+**Note**: Manually import and use the route in `app/routes/index.js`.
 
 ---
 
@@ -117,8 +156,8 @@ Running `codingexpress init` sets up the following directory structure:
 Coding Express CLI scaffolds a robust JWT-based authentication system with support for:
 
 - Email or phone-based registration and login.
-- OTP-based login and password reset.
-- Refresh tokens for session management.
+- OTP-based login and password reset (6-digit OTP, valid for 10 minutes).
+- Refresh tokens for session management (default expiry: 7 days).
 - Profile retrieval.
 - Email and SMS OTP delivery (via Nodemailer and Twilio, requires configuration).
 
@@ -387,7 +426,7 @@ Authorization: Bearer <your_jwt_token_here>
 
 ## Resource API Endpoints (Example: Products)
 
-When you run `codingexpress make:controller ProductController`, `codingexpress make:model Product`, and `codingexpress make:route product`, Coding Express CLI generates RESTful endpoints for resources. Below is an example for a `Product` resource, accessible at `/api/products`.
+Running `codingexpress make:resource Product` generates a full resource with RESTful endpoints accessible at `/api/products`. Below are the endpoints for a `Product` resource.
 
 ### 1. Get All Products (Paginated)
 
@@ -581,7 +620,7 @@ Coding Express CLI generates a Postman collection (`<appName>.postman_collection
 **Features**:
 
 - Automatically saves `accessToken` and `refreshToken` as environment variables during login/refresh.
-- Includes requests for all authentication and product endpoints.
+- Includes requests for all authentication and sample resource (e.g., Product) endpoints.
 
 ---
 
@@ -600,7 +639,7 @@ Coding Express CLI generates a Postman collection (`<appName>.postman_collection
 1. Install Coding Express CLI globally:
 
 ```bash
-npm i codingexpress-cli
+npm install -g codingexpress-cli
 ```
 
 2. Initialize a new project:
@@ -609,12 +648,10 @@ npm i codingexpress-cli
 codingexpress init
 ```
 
-3. Create a resource (e.g., Product):
+3. Create a full resource (e.g., Product):
 
 ```bash
-codingexpress make:controller ProductController
-codingexpress make:model Product
-codingexpress make:route product
+codingexpress make:resource Product
 ```
 
 4. Update `app/routes/index.js` to include the new route:
@@ -636,5 +673,15 @@ router.use("/products", productRoutes);
 - For production, secure your `.env` file and restrict `CORS_ORIGIN`.
 - Run `npm audit fix` if vulnerabilities are reported during initialization.
 - Customize validators (`app/validators/*.js`) and schemas (`app/models/*.js`) as needed.
+
+---
+
+## Downloading This README
+
+To download this README as a Markdown file:
+
+1. Copy the content above.
+2. Save it to a file named `README.md` using a text editor (e.g., VS Code, Notepad).
+3. Alternatively, if viewing this in a browser or compatible interface, use the provided download functionality to save it as `README.md`.
 
 Coding Express CLI streamlines Express.js development with a structured, secure, and scalable foundation. Happy coding!
