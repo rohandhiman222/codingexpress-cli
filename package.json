@@ -1,6 +1,6 @@
 {
   "name": "codingexpress-cli",
-  "version": "1.1.2",
+  "version": "2.0.0",
   "description": "A Laravel-like CLI for scaffolding Express.js applications.",
   "main": "bin/codingexpress.js",
   "bin": {
@@ -12,6 +12,9 @@
     "scaffold",
     "generator"
   ],
+  "dependencies": {
+    "inquirer": "^8.2.4"
+  },
   "author": "Rohan Dhiman",
   "license": "ISC"
 }

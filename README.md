@@ -2,27 +2,21 @@
 
 Coding Express CLI is a command-line tool designed to simplify and accelerate the development of Express.js applications by providing a Laravel-inspired scaffolding experience. It automates project setup, dependency installation, authentication scaffolding, and generates boilerplate code for controllers, models, routes, validators, and full resources.
 
----
-
 ## Installation
 
 To use Coding Express CLI, install it globally via npm:
 
-```bash
+```
 npm install -g codingexpress-cli
 ```
 
----
-
 ## Usage
 
-```bash
+```
 codingexpress <command> [names...] [options]
 ```
 
 Coding Express CLI provides commands to initialize projects and generate boilerplate code for various components.
-
----
 
 ## Available Commands
 
@@ -38,9 +32,9 @@ Initializes a new Express.js project with the following features:
 - Runs `npm audit` to check for vulnerabilities.
 - Starts the development server with `nodemon`.
 
-**Example**:
+**Example:**
 
-```bash
+```
 codingexpress init
 ```
 
@@ -48,9 +42,9 @@ codingexpress init
 
 Creates one or more controller files in `app/controllers` and corresponding validator files in `app/validators`. Each controller includes CRUD methods (`index`, `store`, `show`, `update`, `destroy`) with pagination support for the `index` method.
 
-**Example**:
+**Example:**
 
-```bash
+```
 codingexpress make:controller Product Order
 ```
 
@@ -63,13 +57,13 @@ This creates:
 
 Creates one or more Mongoose model files in `app/models` with a basic schema. Supports multiple database connections via the `--connection` option.
 
-**Options**:
+**Options:**
 
 - `--connection=<name>`: Specifies the database connection from `config/database.js`. Defaults to `'default'`.
 
-**Example**:
+**Example:**
 
-```bash
+```
 codingexpress make:model Product Order --connection=secondary
 ```
 
@@ -81,9 +75,9 @@ This creates:
 
 Creates one or more route files in `app/routes` with RESTful routes (`GET /`, `POST /`, `GET /:id`, `PUT /:id`, `DELETE /:id`) linked to the corresponding controller and validator. Routes are protected by authentication middleware.
 
-**Example**:
+**Example:**
 
-```bash
+```
 codingexpress make:route product order
 ```
 
@@ -92,7 +86,7 @@ This creates:
 - `app/routes/productRoutes.js`
 - `app/routes/orderRoutes.js`
 
-**Note**: Manually import and use the route in `app/routes/index.js`, e.g.:
+**Note:** Manually import and use the route in `app/routes/index.js`, e.g.:
 
 ```javascript
 const productRoutes = require("./productRoutes");
@@ -103,13 +97,13 @@ router.use("/products", productRoutes);
 
 Creates a full resource, including a model, validator, controller, and route file for each specified name. Supports the `--connection` option for model database configuration.
 
-**Options**:
+**Options:**
 
 - `--connection=<name>`: Specifies the database connection for the model. Defaults to `'default'`.
 
-**Example**:
+**Example:**
 
-```bash
+```
 codingexpress make:resource Product Order --connection=secondary
 ```
 
@@ -120,9 +114,7 @@ This creates:
 - `app/controllers/ProductController.js` and `app/controllers/OrderController.js`
 - `app/routes/productRoutes.js` and `app/routes/orderRoutes.js`
 
-**Note**: Manually import and use the route in `app/routes/index.js`.
-
----
+**Note:** Manually import and use the route in `app/routes/index.js`.
 
 ## Project Structure
 
@@ -130,26 +122,24 @@ Running `codingexpress init` sets up the following directory structure:
 
 ```
 ├── app
-│   ├── controllers/        # Controller files (e.g., AuthController.js, ProductController.js)
-│   ├── middleware/         # Middleware (e.g., errorHandler.js, authMiddleware.js)
-│   ├── models/             # Mongoose models (e.g., User.js, Product.js)
-│   ├── routes/             # Route files (e.g., index.js, authRoutes.js, productRoutes.js)
-│   ├── validators/         # Validation rules (e.g., authValidator.js, productValidator.js)
+│   ├── controllers/          # Controller files (e.g., AuthController.js, ProductController.js)
+│   ├── middleware/           # Middleware (e.g., errorHandler.js, authMiddleware.js)
+│   ├── models/               # Mongoose models (e.g., User.js, Product.js)
+│   ├── routes/               # Route files (e.g., index.js, authRoutes.js, productRoutes.js)
+│   └── validators/           # Validation rules (e.g., authValidator.js, productValidator.js)
 ├── config
-│   ├── database.js         # Database connection configuration
-├── public/                 # Static assets
-├── .env                    # Environment variables
-├── .gitignore              # Git ignore file
-├── .prettierrc             # Prettier configuration
-├── .prettierignore         # Prettier ignore rules
+│   └── database.js           # Database connection configuration
+├── public/                   # Static assets
+├── .env                      # Environment variables
+├── .gitignore                # Git ignore file
+├── .prettierrc               # Prettier configuration
+├── .prettierignore           # Prettier ignore rules
 ├── .vscode
-│   ├── settings.json       # VS Code settings (auto-format on save)
-├── package.json            # Project metadata and dependencies
-├── server.js               # Main Express server
-├── <appName>.postman_collection.json  # Postman collection for API testing
+│   └── settings.json         # VS Code settings (auto-format on save)
+├── package.json              # Project metadata and dependencies
+├── server.js                 # Main Express server
+└── <appName>.postman_collection.json # Postman collection for API testing
 ```
-
----
 
 ## Authentication System
 
@@ -167,11 +157,11 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 
 #### 1. Register New User
 
-- **URL**: `/api/auth/register`
-- **Method**: `POST`
-- **Description**: Registers a new user with email/phone and optional password for OTP-based access.
+- **URL:** `/api/auth/register`
+- **Method:** `POST`
+- **Description:** Registers a new user with email/phone and optional password for OTP-based access.
 
-**Request Body Examples**:
+**Request Body Examples:**
 
 **Email & Password**
 
@@ -207,7 +197,7 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 }
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -217,11 +207,11 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 
 #### 2. Send OTP
 
-- **URL**: `/api/auth/send-otp`
-- **Method**: `POST`
-- **Description**: Sends a 6-digit OTP to the specified email or phone (valid for 10 minutes, configurable via `OTP_EXPIRY_MINUTES` in `.env`).
+- **URL:** `/api/auth/send-otp`
+- **Method:** `POST`
+- **Description:** Sends a 6-digit OTP to the specified email or phone (valid for 10 minutes, configurable via `OTP_EXPIRY_MINUTES` in `.env`).
 
-**Request Body Examples**:
+**Request Body Examples:**
 
 **To Email**
 
@@ -239,7 +229,7 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 }
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -247,15 +237,15 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 }
 ```
 
-**Note**: Email/SMS services require configuration in `.env` (e.g., `EMAIL_SERVICE_HOST`, `TWILIO_ACCOUNT_SID`).
+**Note:** Email/SMS services require configuration in `.env` (e.g., `EMAIL_SERVICE_HOST`, `TWILIO_ACCOUNT_SID`).
 
 #### 3. User Login
 
-- **URL**: `/api/auth/login`
-- **Method**: `POST`
-- **Description**: Authenticates a user via email/phone with password or OTP. Returns JWT access and refresh tokens.
+- **URL:** `/api/auth/login`
+- **Method:** `POST`
+- **Description:** Authenticates a user via email/phone with password or OTP. Returns JWT access and refresh tokens.
 
-**Request Body Examples**:
+**Request Body Examples:**
 
 **With Password (Email)**
 
@@ -293,7 +283,7 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 }
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -305,11 +295,11 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 
 #### 4. Refresh Token
 
-- **URL**: `/api/auth/refresh-token`
-- **Method**: `POST`
-- **Description**: Generates a new access token using a valid refresh token.
+- **URL:** `/api/auth/refresh-token`
+- **Method:** `POST`
+- **Description:** Generates a new access token using a valid refresh token.
 
-**Request Body**:
+**Request Body:**
 
 ```json
 {
@@ -317,7 +307,7 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 }
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -329,11 +319,11 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 
 #### 5. Forgot Password
 
-- **URL**: `/api/auth/forgot-password`
-- **Method**: `POST`
-- **Description**: Sends an OTP to the user's email or phone for password reset.
+- **URL:** `/api/auth/forgot-password`
+- **Method:** `POST`
+- **Description:** Sends an OTP to the user's email or phone for password reset.
 
-**Request Body Examples**:
+**Request Body Examples:**
 
 **To Email**
 
@@ -351,7 +341,7 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 }
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -361,11 +351,11 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 
 #### 6. Reset Password
 
-- **URL**: `/api/auth/reset-password`
-- **Method**: `POST`
-- **Description**: Resets the user's password after verifying the OTP.
+- **URL:** `/api/auth/reset-password`
+- **Method:** `POST`
+- **Description:** Resets the user's password after verifying the OTP.
 
-**Request Body Examples**:
+**Request Body Examples:**
 
 **Using Email and OTP**
 
@@ -387,7 +377,7 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 }
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -397,17 +387,17 @@ All authentication routes are prefixed with `/api/auth`. The base URL is `http:/
 
 #### 7. Get User Profile
 
-- **URL**: `/api/auth/profile`
-- **Method**: `GET`
-- **Description**: Retrieves the authenticated user's profile (excludes sensitive fields like password).
+- **URL:** `/api/auth/profile`
+- **Method:** `GET`
+- **Description:** Retrieves the authenticated user's profile (excludes sensitive fields like password).
 
-**Headers**:
+**Headers:**
 
 ```
 Authorization: Bearer <your_jwt_token_here>
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -422,25 +412,23 @@ Authorization: Bearer <your_jwt_token_here>
 }
 ```
 
----
-
 ## Resource API Endpoints (Example: Products)
 
 Running `codingexpress make:resource Product` generates a full resource with RESTful endpoints accessible at `/api/products`. Below are the endpoints for a `Product` resource.
 
-### 1. Get All Products (Paginated)
+#### 1. Get All Products (Paginated)
 
-- **URL**: `/api/products?page=1&limit=10`
-- **Method**: `GET`
-- **Description**: Retrieves a paginated list of products.
+- **URL:** `/api/products?page=1&limit=10`
+- **Method:** `GET`
+- **Description:** Retrieves a paginated list of products.
 
-**Headers**:
+**Headers:**
 
 ```
 Authorization: Bearer <your_jwt_token_here>
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -462,20 +450,20 @@ Authorization: Bearer <your_jwt_token_here>
 }
 ```
 
-### 2. Create Product
+#### 2. Create Product
 
-- **URL**: `/api/products`
-- **Method**: `POST`
-- **Description**: Creates a new product.
+- **URL:** `/api/products`
+- **Method:** `POST`
+- **Description:** Creates a new product.
 
-**Headers**:
+**Headers:**
 
 ```
 Authorization: Bearer <your_jwt_token_here>
 Content-Type: application/json
 ```
 
-**Request Body**:
+**Request Body:**
 
 ```json
 {
@@ -483,7 +471,7 @@ Content-Type: application/json
 }
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -497,19 +485,19 @@ Content-Type: application/json
 }
 ```
 
-### 3. Get Product by ID
+#### 3. Get Product by ID
 
-- **URL**: `/api/products/:id`
-- **Method**: `GET`
-- **Description**: Retrieves a product by its ID.
+- **URL:** `/api/products/:id`
+- **Method:** `GET`
+- **Description:** Retrieves a product by its ID.
 
-**Headers**:
+**Headers:**
 
 ```
 Authorization: Bearer <your_jwt_token_here>
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -523,20 +511,20 @@ Authorization: Bearer <your_jwt_token_here>
 }
 ```
 
-### 4. Update Product
+#### 4. Update Product
 
-- **URL**: `/api/products/:id`
-- **Method**: `PUT`
-- **Description**: Updates an existing product.
+- **URL:** `/api/products/:id`
+- **Method:** `PUT`
+- **Description:** Updates an existing product.
 
-**Headers**:
+**Headers:**
 
 ```
 Authorization: Bearer <your_jwt_token_here>
 Content-Type: application/json
 ```
 
-**Request Body**:
+**Request Body:**
 
 ```json
 {
@@ -544,7 +532,7 @@ Content-Type: application/json
 }
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -558,19 +546,19 @@ Content-Type: application/json
 }
 ```
 
-### 5. Delete Product
+#### 5. Delete Product
 
-- **URL**: `/api/products/:id`
-- **Method**: `DELETE`
-- **Description**: Deletes a product by its ID.
+- **URL:** `/api/products/:id`
+- **Method:** `DELETE`
+- **Description:** Deletes a product by its ID.
 
-**Headers**:
+**Headers:**
 
 ```
 Authorization: Bearer <your_jwt_token_here>
 ```
 
-**Response** (Success):
+**Response (Success):**
 
 ```json
 {
@@ -578,13 +566,11 @@ Authorization: Bearer <your_jwt_token_here>
 }
 ```
 
----
-
 ## Environment Configuration
 
 The `.env` file contains critical configurations. After running `codingexpress init`, update the following variables:
 
-```bash
+```
 PORT=3000
 DB_URI_DEFAULT=mongodb://127.0.0.1:27017/main_database
 DB_URI_SECONDARY=mongodb://127.0.0.1:27017/secondary_database
@@ -605,52 +591,46 @@ TWILIO_PHONE_NUMBER=+15017122661
 CORS_ORIGIN=*
 ```
 
-**Notes**:
+**Notes:**
 
 - Replace placeholder values for email (Nodemailer) and SMS (Twilio) services with actual credentials.
 - Ensure `JWT_SECRET` and `JWT_REFRESH_SECRET` are strong, unique keys.
 - Adjust `CORS_ORIGIN` for production (e.g., `https://yourdomain.com`).
 
----
-
 ## Postman Collection
 
 Coding Express CLI generates a Postman collection (`<appName>.postman_collection.json`) with pre-configured requests for all authentication and sample resource endpoints. Import it into Postman and set the `baseUrl` variable (default: `http://localhost:3000`).
 
-**Features**:
+**Features:**
 
 - Automatically saves `accessToken` and `refreshToken` as environment variables during login/refresh.
-- Includes requests for all authentication and sample resource (e.g., Product) endpoints.
-
----
+- Includes requests for all authentication and sample resource (e.g., `Product`) endpoints.
 
 ## Additional Features
 
-- **Error Handling**: The `errorHandler` middleware handles validation errors, duplicate key errors, JWT errors, and generic server errors.
-- **Code Formatting**: Prettier is configured with VS Code integration (`format on save`). Run `npm run format` for manual formatting.
-- **Security**: Routes are protected with JWT-based `authMiddleware`. Passwords and OTPs are hashed using `bcryptjs`.
-- **Database Connections**: Supports multiple MongoDB connections via `config/database.js`.
-- **Vulnerability Checks**: Runs `npm audit` during initialization to identify dependency vulnerabilities.
-
----
+- **Error Handling:** The `errorHandler` middleware handles validation errors, duplicate key errors, JWT errors, and generic server errors.
+- **Code Formatting:** Prettier is configured with VS Code integration (format on save). Run `npm run format` for manual formatting.
+- **Security:** Routes are protected with JWT-based `authMiddleware`. Passwords and OTPs are hashed using `bcryptjs`.
+- **Database Connections:** Supports multiple MongoDB connections via `config/database.js`.
+- **Vulnerability Checks:** Runs `npm audit` during initialization to identify dependency vulnerabilities.
 
 ## Example Workflow
 
 1. Install Coding Express CLI globally:
 
-```bash
+```
 npm install -g codingexpress-cli
 ```
 
 2. Initialize a new project:
 
-```bash
+```
 codingexpress init
 ```
 
-3. Create a full resource (e.g., Product):
+3. Create a full resource (e.g., `Product`):
 
-```bash
+```
 codingexpress make:resource Product
 ```
 
@@ -665,23 +645,9 @@ router.use("/products", productRoutes);
 
 6. Test APIs using the generated Postman collection.
 
----
-
 ## Notes
 
 - Ensure MongoDB is running locally or provide valid `DB_URI_*` values in `.env`.
 - For production, secure your `.env` file and restrict `CORS_ORIGIN`.
 - Run `npm audit fix` if vulnerabilities are reported during initialization.
 - Customize validators (`app/validators/*.js`) and schemas (`app/models/*.js`) as needed.
-
----
-
-## Downloading This README
-
-To download this README as a Markdown file:
-
-1. Copy the content above.
-2. Save it to a file named `README.md` using a text editor (e.g., VS Code, Notepad).
-3. Alternatively, if viewing this in a browser or compatible interface, use the provided download functionality to save it as `README.md`.
-
-Coding Express CLI streamlines Express.js development with a structured, secure, and scalable foundation. Happy coding!
