@@ -1,6 +1,6 @@
 {
   "name": "codingexpress-cli",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "A Laravel-like CLI for scaffolding Express.js applications.",
   "main": "bin/codingexpress.js",
   "bin": {

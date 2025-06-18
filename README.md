@@ -88,6 +88,14 @@ codingexpress make:controller Product Order
 - `app/controllers/ProductController.js`, `app/validators/ProductValidator.js`
 - `app/controllers/OrderController.js`, `app/validators/OrderValidator.js`
 
+### `codingexpress update:resource Product.getPrice`
+
+It will add new method inside ProductController and also update route file with controller name and route name
+
+**Output:**
+
+- `app/controllers/ProductController.js`, `app/validators/ProductValidator.js`
+
 ### `codingexpress make:model <Name...>`
 
 Creates Mongoose model files with a basic schema. Supports multiple database connections.
