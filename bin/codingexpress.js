@@ -4,12 +4,19 @@
 // Usage:
 // 1. Install globally: npm install -g .
 // 2. Initialize project: codingexpress init
-// 3. Create a resource: codingexpress make:resource Product
+// 3. Initialize from OpenAPI: codingexpress init ./path/to/openapi.yaml
+// 4. Create a resource: codingexpress make:resource Product
 
 const fs = require("fs");
 const path = require("path");
 const { EOL } = require("os");
 const { execSync } = require("child_process");
+
+// NEW FEATURE: Add dependencies for parsing OpenAPI files.
+// Make sure to add `js-yaml` and `swagger-parser` to your CLI's package.json
+// Example: npm install js-yaml swagger-parser
+const yaml = require("js-yaml");
+const SwaggerParser = require("swagger-parser");
 
 // Get command line arguments
 const args = process.argv.slice(2);
@@ -30,8 +37,22 @@ const feature = parts.length > 1 ? parts[1] : null;
 (async () => {
   switch (action) {
     case "init":
-      console.log(`🚀 Initializing new Express project...`);
-      await initProject();
+      const openapiFilePath = args[1];
+      if (openapiFilePath) {
+        console.log(
+          `🚀 Initializing project from OpenAPI spec: ${openapiFilePath}`
+        );
+        if (!fs.existsSync(openapiFilePath)) {
+          console.error(
+            `❌ Error: OpenAPI file not found at ${openapiFilePath}`
+          );
+          process.exit(1);
+        }
+        await initFromOpenAPI(openapiFilePath);
+      } else {
+        console.log(`🚀 Initializing new Express project...`);
+        await initProject();
+      }
       break;
 
     case "make":
@@ -48,49 +69,27 @@ const feature = parts.length > 1 ? parts[1] : null;
         process.exit(1);
       }
 
-      const processName = (name) => {
-        const sanitized = name.replace(/[^a-zA-Z0-9]/g, "");
-        if (!sanitized) {
-          console.error(`Error: The provided name '${name}' is invalid.`);
-          return null;
-        }
-        return sanitized.charAt(0).toUpperCase() + sanitized.slice(1);
-      };
-
       for (const name of names) {
-        const capitalizedName = processName(name);
-        if (capitalizedName) {
-          switch (type) {
-            case "controller":
-            case "model":
-            case "route":
-            case "resource":
-              const config = getProjectConfig();
-              const orm = makeOptions.orm || config.orm;
+        await handleMakeCommand(type, name, makeOptions);
+      }
+      break;
 
-              if (type === "resource") {
-                await createResource(capitalizedName, orm);
-              } else if (type === "model") {
-                await createModel(capitalizedName, orm, makeOptions);
-              } else if (type === "controller") {
-                createController(capitalizedName, orm);
-              } else if (type === "route") {
-                const sanitized = name.replace(/[^a-zA-Z0-9-]/g, "");
-                if (sanitized) {
-                  createRouteFile(sanitized.toLowerCase());
-                } else {
-                  console.error(
-                    `Error: The provided name '${name}' is invalid.`
-                  );
-                }
-              }
-              break;
-            default:
-              console.error(`Error: Unknown type '${type}' for make command.`);
-              displayHelp();
-              break;
-          }
+    // NEW: Handle the update:resource command
+    case "update":
+      if (feature === "resource") {
+        const resourceArg = args[1];
+        if (!resourceArg || !resourceArg.includes(".")) {
+          console.error(
+            "❌ Error: Please provide the resource and method name in 'ResourceName.methodName' format."
+          );
+          displayHelp();
+          process.exit(1);
         }
+        const [resourceName, methodName] = resourceArg.split(".");
+        await updateResource(resourceName, methodName);
+      } else {
+        console.error(`Error: Unknown type '${feature}' for update command.`);
+        displayHelp();
       }
       break;
 
@@ -136,6 +135,117 @@ function parseArgs(args) {
 
 // --- Generator Functions ---
 
+async function initFromOpenAPI(filePath) {
+  let spec;
+  try {
+    spec = await SwaggerParser.bundle(filePath);
+    console.log("✅ OpenAPI specification parsed and validated successfully.");
+  } catch (err) {
+    console.error(`❌ Error parsing OpenAPI specification: ${err.message}`);
+    process.exit(1);
+  }
+
+  const { default: inquirer } = await import("inquirer");
+  const answers = await inquirer.prompt([
+    {
+      type: "input",
+      name: "appName",
+      message: "What is the name of your application?",
+      default:
+        spec.info?.title?.replace(/\s+/g, "-") || path.basename(process.cwd()),
+      validate: (input) =>
+        /^([A-Za-z\-\_\d])+$/.test(input) ||
+        "Project name may only include letters, numbers, underscores and hashes.",
+    },
+    {
+      type: "list",
+      name: "orm",
+      message: "Which ORM would you like to use for this project?",
+      choices: ["Mongoose", "Prisma"],
+      default: "Mongoose",
+    },
+  ]);
+
+  const { appName, orm: ormChoice } = answers;
+  const orm = ormChoice.toLowerCase();
+  const projectPath = path.join(process.cwd(), appName);
+
+  if (fs.existsSync(projectPath)) {
+    console.error(
+      `Error: Directory '${appName}' already exists at ${projectPath}`
+    );
+    process.exit(1);
+  }
+
+  // Create project structure and core files
+  createProjectStructure(projectPath, orm);
+  createCoreFiles(projectPath, appName, orm);
+
+  // Generate all resources from the parsed spec
+  await generateModelsFromSpec(spec, orm, projectPath);
+  await generateRoutesAndControllersFromSpec(spec, orm, projectPath);
+
+  // Scaffold standard auth and install dependencies
+  await scaffoldAuth(orm, projectPath);
+  await installDependencies(orm, projectPath);
+  startDevServer(projectPath);
+}
+
+function createProjectStructure(projectPath, orm) {
+  console.log(`✅ Creating project directory: ${path.basename(projectPath)}`);
+  fs.mkdirSync(projectPath, { recursive: true });
+
+  console.log("Setting up directories...");
+  const directories = [
+    "app/controllers",
+    "app/middleware",
+    "app/routes",
+    "app/validators",
+    "config",
+    "public",
+    ".vscode",
+  ];
+  if (orm === "mongoose") directories.push("app/models");
+  if (orm === "prisma") directories.push("prisma");
+  directories.forEach((dir) =>
+    fs.mkdirSync(path.join(projectPath, dir), { recursive: true })
+  );
+  console.log("Directories created.");
+}
+
+function createCoreFiles(projectPath, appName, orm) {
+  console.log("Creating core files...");
+  writeProjectConfig({ appName, orm }, projectPath);
+  createFile(
+    path.join(projectPath, "package.json"),
+    getPackageJsonTemplate(appName, orm)
+  );
+  createFile(path.join(projectPath, "server.js"), getServerTemplate(orm));
+  createFile(
+    path.join(projectPath, "app/routes/index.js"),
+    getMainRouteTemplateWithAuth()
+  );
+  createFile(
+    path.join(projectPath, "app/middleware/errorHandler.js"),
+    getErrorHandlerTemplate(orm)
+  );
+  createFile(path.join(projectPath, ".env"), getEnvTemplate(orm, appName));
+  createFile(path.join(projectPath, ".gitignore"), getGitignoreTemplate(orm));
+  createFile(
+    path.join(projectPath, "config/database.js"),
+    getDatabaseConfigTemplate(orm)
+  );
+  createFile(path.join(projectPath, "README.md"), getReadmeTemplate(appName));
+
+  if (orm === "prisma") {
+    createFile(
+      path.join(projectPath, "prisma/schema.prisma"),
+      getPrismaSchemaTemplate()
+    );
+  }
+  console.log("Core files created.");
+}
+
 async function initProject() {
   const { default: inquirer } = await import("inquirer");
 
@@ -171,51 +281,9 @@ async function initProject() {
     process.exit(1);
   }
 
-  fs.mkdirSync(projectPath, { recursive: true });
-  console.log(`✅ Created project directory: ${appName}`);
+  createProjectStructure(projectPath, orm);
+  createCoreFiles(projectPath, appName, orm);
 
-  writeProjectConfig({ appName, orm }, projectPath);
-
-  console.log("Setting up directories...");
-  const directories = [
-    "app/controllers",
-    "app/middleware",
-    "app/routes",
-    "app/validators",
-    "config",
-    "public",
-    ".vscode",
-  ];
-  if (orm === "mongoose") {
-    directories.push("app/models");
-  } else if (orm === "prisma") {
-    directories.push("prisma");
-  }
-  directories.forEach((dir) =>
-    fs.mkdirSync(path.join(projectPath, dir), { recursive: true })
-  );
-  console.log("Directories created.");
-
-  console.log("Creating core files...");
-  createFile(
-    path.join(projectPath, "package.json"),
-    getPackageJsonTemplate(appName, orm)
-  );
-  createFile(path.join(projectPath, "server.js"), getServerTemplate(orm));
-  createFile(
-    path.join(projectPath, "app/routes/index.js"),
-    getMainRouteTemplateWithAuth()
-  );
-  createFile(
-    path.join(projectPath, "app/middleware/errorHandler.js"),
-    getErrorHandlerTemplate(orm)
-  );
-  createFile(path.join(projectPath, ".env"), getEnvTemplate(orm, appName));
-  createFile(path.join(projectPath, ".gitignore"), getGitignoreTemplate(orm));
-  createFile(
-    path.join(projectPath, "config/database.js"),
-    getDatabaseConfigTemplate(orm)
-  );
   createFile(
     path.join(projectPath, ".prettierrc"),
     getPrettierConfigTemplate()
@@ -232,42 +300,433 @@ async function initProject() {
     path.join(projectPath, `${appName}.postman_collection.json`),
     getPostmanCollectionTemplate(appName)
   );
-  if (orm === "prisma") {
-    createFile(
-      path.join(projectPath, "prisma/schema.prisma"),
-      getPrismaSchemaTemplate()
-    );
-  }
-
-  console.log("Core files created.");
 
   await scaffoldAuth(orm, projectPath);
   await installDependencies(orm, projectPath);
   startDevServer(projectPath);
 }
 
-async function createResource(name, orm) {
+// --- OpenAPI Generation ---
+
+function openApiTypeToMongooseType(openApiType) {
+  const typeMap = {
+    string: "String",
+    number: "Number",
+    integer: "Number",
+    boolean: "Boolean",
+    array: "[Schema.Types.Mixed]",
+    object: "Schema.Types.Mixed",
+  };
+  return typeMap[openApiType] || "String";
+}
+
+function openApiTypeToPrismaType(prop) {
+  if (prop.type === "string" && prop.format === "date-time") return "DateTime";
+  const typeMap = {
+    string: "String",
+    integer: "Int",
+    number: "Float",
+    boolean: "Boolean",
+  };
+  return typeMap[prop.type] || "Json";
+}
+
+async function generateModelsFromSpec(spec, orm, projectPath) {
+  console.log("🤖 Generating models from OpenAPI schemas...");
+  const schemas = spec.components?.schemas || {};
+
+  if (Object.keys(schemas).length === 0) {
+    console.log("🟡 No schemas found in spec. Skipping model creation.");
+    return;
+  }
+
+  for (const schemaName in schemas) {
+    const schema = schemas[schemaName];
+    if (schema.type !== "object" || !schema.properties) continue;
+
+    if (orm === "mongoose") {
+      let modelFields = "";
+      for (const propName in schema.properties) {
+        const prop = schema.properties[propName];
+        const type = openApiTypeToMongooseType(prop.type);
+        const required = schema.required?.includes(propName)
+          ? ", required: true"
+          : "";
+        const trim = prop.type === "string" ? ", trim: true" : "";
+        modelFields += `\n    ${propName}: { type: ${type}${required}${trim} },`;
+      }
+      const modelPath = path.join(projectPath, `app/models/${schemaName}.js`);
+      createFile(
+        modelPath,
+        getMongooseModelTemplate(schemaName, "default", `{${modelFields}\n  }`)
+      );
+    } else if (orm === "prisma") {
+      let modelFields = "";
+      for (const propName in schema.properties) {
+        if (propName.toLowerCase() === "id") continue;
+
+        const prop = schema.properties[propName];
+        const type = openApiTypeToPrismaType(prop);
+        const optional = schema.required?.includes(propName) ? "" : "?";
+        modelFields += `\n  ${propName.padEnd(12)}${type}${optional}`;
+      }
+      const modelTemplate = `model ${schemaName} {\n  id          Int      @id @default(autoincrement())\n  ${modelFields}\n\n  createdAt   DateTime @default(now())\n  updatedAt   DateTime @updatedAt\n}`;
+      const schemaPath = path.join(projectPath, "prisma/schema.prisma");
+      fs.appendFileSync(schemaPath, EOL + EOL + modelTemplate);
+      console.log(`✅ Appended Prisma model '${schemaName}' to ${schemaPath}`);
+    }
+  }
+}
+
+function identifyCrudType(operationId, httpMethod, route) {
+  if (!operationId) return "custom";
+  if (/^(create|add|store)/i.test(operationId)) return "store";
+  if (/^(update|patch|edit)/i.test(operationId)) return "update";
+  if (/^(delete|remove|destroy)/i.test(operationId)) return "destroy";
+  if (/^(get|find|show|retrieve).*(ById|One)$/i.test(operationId))
+    return "show";
+  if (/^(list|get|find|index|search)/i.test(operationId)) return "index";
+  if (httpMethod === "get" && !route.includes("{")) return "index";
+  if (httpMethod === "post" && !route.includes("{")) return "store";
+  if (httpMethod === "get" && route.includes("{")) return "show";
+  if (httpMethod === "put" || httpMethod === "patch") return "update";
+  if (httpMethod === "delete") return "destroy";
+  return "custom";
+}
+
+function getControllerMethodBody(crudType, modelName, orm) {
+  const modelNameLower = modelName.charAt(0).toLowerCase() + modelName.slice(1);
+  const mongooseSearch = `
+      const { page = 1, limit = 10, ...filters } = req.query;
+      const query = {};
+      // Example: search by fields, could be extended for regex, etc.
+      for (const key in filters) {
+        if (Object.prototype.hasOwnProperty.call(filters, key)) {
+          query[key] = { $regex: filters[key], $options: 'i' };
+        }
+      }
+      const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+      const [items, totalItems] = await Promise.all([
+        Model.find(query).skip(skip).limit(parseInt(limit, 10)).lean(),
+        Model.countDocuments(query),
+      ]);`;
+
+  const prismaSearch = `
+      const { page = 1, limit = 10, ...filters } = req.query;
+      const where = {};
+      // Example: search by fields, could be extended for different modes.
+      for (const key in filters) {
+        if (Object.prototype.hasOwnProperty.call(filters, key)) {
+          where[key] = { contains: filters[key], mode: 'insensitive' };
+        }
+      }
+      const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+      const [items, totalItems] = await prisma.$transaction([
+        prisma.${modelNameLower}.findMany({ where, skip, take: parseInt(limit, 10) }),
+        prisma.${modelNameLower}.count({ where }),
+      ]);`;
+
+  const templates = {
+    mongoose: {
+      index: `try {\n      const Model = await getModel();\n      ${mongooseSearch}\n      const totalPages = Math.ceil(totalItems / parseInt(limit, 10));\n      res.status(200).json({ message: '${modelName} list retrieved successfully', data: items, pagination: { totalItems, totalPages, currentPage: parseInt(page, 10), itemsPerPage: parseInt(limit, 10) } });\n    } catch (error) { next(error); }`,
+      store: `try {\n      const Model = await getModel();\n      const item = new Model(req.body);\n      await item.save();\n      res.status(201).json({ message: '${modelName} created successfully', data: item });\n    } catch (error) { next(error); }`,
+      show: `try {\n      const { id } = req.params;\n      const Model = await getModel();\n      const item = await Model.findById(id).lean();\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} retrieved successfully', data: item });\n    } catch (error) { next(error); }`,
+      update: `try {\n      const { id } = req.params;\n      const Model = await getModel();\n      const item = await Model.findByIdAndUpdate(id, req.body, { new: true, runValidators: true });\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} updated successfully', data: item });\n    } catch (error) { next(error); }`,
+      destroy: `try {\n      const { id } = req.params;\n      const Model = await getModel();\n      const item = await Model.findByIdAndDelete(id);\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} deleted successfully' });\n    } catch (error) { next(error); }`,
+    },
+    prisma: {
+      index: `try {\n      ${prismaSearch}\n      const totalPages = Math.ceil(totalItems / parseInt(limit, 10));\n      res.status(200).json({ message: '${modelName} list retrieved successfully', data: items, pagination: { totalItems, totalPages, currentPage: parseInt(page, 10), itemsPerPage: parseInt(limit, 10) } });\n    } catch (error) { next(error); }`,
+      store: `try {\n      const item = await prisma.${modelNameLower}.create({ data: req.body });\n      res.status(201).json({ message: '${modelName} created successfully', data: item });\n    } catch (error) { next(error); }`,
+      show: `try {\n      const item = await prisma.${modelNameLower}.findUnique({ where: { id: parseInt(req.params.id, 10) } });\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} retrieved successfully', data: item });\n    } catch (error) { next(error); }`,
+      update: `try {\n      const item = await prisma.${modelNameLower}.update({ where: { id: parseInt(req.params.id, 10) }, data: req.body });\n      res.status(200).json({ message: '${modelName} updated successfully', data: item });\n    } catch (error) { next(error); }`,
+      destroy: `try {\n      await prisma.${modelNameLower}.delete({ where: { id: parseInt(req.params.id, 10) } });\n      res.status(200).json({ message: '${modelName} deleted successfully' });\n    } catch (error) { next(error); }`,
+    },
+  };
+  const custom = `// TODO: Implement this method
+    try {
+      res.status(501).json({ message: 'Not Implemented' });
+    } catch (error) {
+      next(error);
+    }`;
+
+  return (templates[orm] && templates[orm][crudType]) || custom;
+}
+
+async function generateValidatorFromSpec(resourceName, schema, projectPath) {
+  if (!schema || !schema.properties) return;
+
+  const validationRules = { store: [], update: [] };
+  for (const propName in schema.properties) {
+    const prop = schema.properties[propName];
+    let storeChain = [`body('${propName}')`];
+    if (schema.required?.includes(propName)) {
+      storeChain.push(`.notEmpty().withMessage('${propName} is required')`);
+    }
+
+    const typeMap = {
+      string: "isString",
+      integer: "isInt",
+      number: "isFloat",
+      boolean: "isBoolean",
+    };
+    if (typeMap[prop.type]) {
+      storeChain.push(
+        `.${typeMap[prop.type]}().withMessage('${propName} must be a ${
+          prop.type
+        }')`
+      );
+    }
+    if (prop.type === "string" && prop.format === "email") {
+      storeChain.push(
+        `.isEmail().withMessage('Invalid email format').normalizeEmail()`
+      );
+    }
+    if (prop.type === "string") storeChain.push(".trim()");
+
+    validationRules.store.push(`  ${storeChain.join("")}`);
+    validationRules.update.push(
+      `  body('${propName}').optional()${storeChain.slice(1).join("")}`
+    );
+  }
+
+  const template = `const { body } = require('express-validator');\n
+const ${resourceName.toLowerCase()}Validator = {
+  store: [\n${validationRules.store.join(",\n")}\n  ],
+  update: [\n${validationRules.update.join(",\n")}\n  ],
+};\n
+module.exports = ${resourceName.toLowerCase()}Validator;`;
+  createFile(
+    path.join(projectPath, `app/validators/${resourceName}Validator.js`),
+    template
+  );
+}
+
+async function generateRoutesAndControllersFromSpec(spec, orm, projectPath) {
+  console.log("🤖 Generating routes and controllers from OpenAPI paths...");
+  const paths = spec.paths || {};
+  if (Object.keys(paths).length === 0) {
+    console.log("🟡 No paths found. Skipping route/controller creation.");
+    return;
+  }
+
+  const resources = {};
+  for (const route in paths) {
+    const resourceNameGuess = (route.split("/")[1] || "").replace(
+      /[^a-zA-Z0-9]/g,
+      ""
+    );
+    if (!resourceNameGuess) continue;
+    const pathDetails = paths[route];
+    const resourceName =
+      pathDetails.get?.tags?.[0] ||
+      pathDetails.post?.tags?.[0] ||
+      resourceNameGuess;
+    const capitalizedName =
+      resourceName.charAt(0).toUpperCase() + resourceName.slice(1);
+    if (!resources[capitalizedName]) resources[capitalizedName] = { paths: {} };
+    resources[capitalizedName].paths[route] = pathDetails;
+  }
+
+  for (const resourceName in resources) {
+    const singularName = resourceName.endsWith("s")
+      ? resourceName.slice(0, -1)
+      : resourceName;
+    const lowerCaseResource =
+      singularName.charAt(0).toLowerCase() + singularName.slice(1);
+    const controllerName = `${singularName}Controller`;
+    const routeFileName = `${lowerCaseResource}Routes.js`;
+    const validatorName = `${lowerCaseResource}Validator`;
+
+    const schema = spec.components?.schemas?.[singularName];
+    if (schema)
+      await generateValidatorFromSpec(singularName, schema, projectPath);
+
+    let controllerMethods = "";
+    let routeEntries = "";
+
+    for (const route in resources[resourceName].paths) {
+      for (const method in resources[resourceName].paths[route]) {
+        const operation = resources[resourceName].paths[route][method];
+        if (!operation.operationId) continue;
+
+        const crudType = identifyCrudType(operation.operationId, method, route);
+        controllerMethods += `\n  /**\n   * ${
+          operation.summary || operation.operationId
+        }\n   */\n  async ${
+          operation.operationId
+        }(req, res, next) {\n    ${getControllerMethodBody(
+          crudType,
+          singularName,
+          orm
+        )}\n  }\n`;
+
+        const expressRoute = route.replace(/{/g, ":").replace(/}/g, "");
+        const validatorMiddleware =
+          schema && (crudType === "store" || crudType === "update")
+            ? `${validatorName}.${crudType}, `
+            : "";
+        routeEntries += `router.${method}('${expressRoute}', ${validatorMiddleware}${controllerName}.${operation.operationId});\n`;
+      }
+    }
+
+    const modelImport =
+      orm === "mongoose"
+        ? `const getModel = require('../models/${singularName}');`
+        : `const { prisma } = require('../../config/database');`;
+    createFile(
+      path.join(projectPath, `app/controllers/${controllerName}.js`),
+      `${modelImport}\n\nclass ${controllerName} {${controllerMethods}\n}\n\nmodule.exports = new ${controllerName}();`
+    );
+
+    const validatorImport = schema
+      ? `const ${validatorName} = require('../validators/${singularName}Validator');`
+      : `// TODO: Create and import validator for this resource`;
+    createFile(
+      path.join(projectPath, `app/routes/${routeFileName}`),
+      `const express = require('express');\nconst router = express.Router();\nconst ${controllerName} = require('../controllers/${controllerName}');\n${validatorImport}\n\n${routeEntries}\nmodule.exports = router;`
+    );
+
+    registerRoute(lowerCaseResource, routeFileName, projectPath);
+  }
+}
+
+// --- NEW/UPDATED COMMAND HANDLERS ---
+async function handleMakeCommand(type, name, options) {
+  const projectPath = process.cwd();
+  const processName = (name) => {
+    const sanitized = name.replace(/[^a-zA-Z0-9]/g, "");
+    if (!sanitized) {
+      console.error(`Error: The provided name '${name}' is invalid.`);
+      return null;
+    }
+    return sanitized.charAt(0).toUpperCase() + sanitized.slice(1);
+  };
+
+  const capitalizedName = processName(name);
+  if (!capitalizedName) return;
+
+  const config = getProjectConfig();
+  const orm = options.orm || config.orm;
+
+  switch (type) {
+    case "resource":
+      await createResource(capitalizedName, orm, projectPath);
+      break;
+    case "model":
+      await createModel(capitalizedName, orm, options, projectPath);
+      break;
+    case "controller":
+      createController(capitalizedName, orm, projectPath);
+      break;
+    case "route":
+      const sanitized = name.replace(/[^a-zA-Z0-9-]/g, "");
+      if (sanitized) {
+        createRouteFile(sanitized.toLowerCase(), null, projectPath);
+      } else {
+        console.error(`Error: The provided name '${name}' is invalid.`);
+      }
+      break;
+    default:
+      console.error(`Error: Unknown type '${type}' for make command.`);
+      displayHelp();
+      break;
+  }
+}
+
+async function createResource(name, orm, projectPath) {
   console.log(`\n🚀 Scaffolding resource: ${name} (using ${orm})...`);
 
-  await createModel(name, orm, {});
-  createController(name, orm);
-  createRouteFile(name.toLowerCase());
+  await createModel(name, orm, {}, projectPath);
+  createController(name, orm, projectPath);
+  const routeFileName = `${name.toLowerCase()}Routes.js`;
+  createRouteFile(name.toLowerCase(), routeFileName, projectPath);
+  // registerRoute is now called inside createRouteFile
 
   console.log(`✅ Resource '${name}' created successfully!`);
   if (orm === "mongoose") {
-    console.log(`   - Model:      app/models/${name}.js`);
+    console.log(`   - Model:       app/models/${name}.js`);
   } else {
-    console.log(`   - Model:      (appended to prisma/schema.prisma)`);
+    console.log(`   - Model:       (appended to prisma/schema.prisma)`);
   }
-  console.log(`   - Validator:  app/validators/${name}Validator.js`);
-  console.log(`   - Controller: app/controllers/${name}Controller.js`);
-  console.log(`   - Routes:     app/routes/${name.toLowerCase()}Routes.js`);
-  console.log(
-    `\n💡 Action Required: Import and use the new route in 'app/routes/index.js'.\n   Example:\n   const ${name.toLowerCase()}Routes = require('./${name.toLowerCase()}Routes.js');\n   router.use('/${name.toLowerCase()}s', ${name.toLowerCase()}Routes);\n`
-  );
+  console.log(`   - Validator:   app/validators/${name}Validator.js`);
+  console.log(`   - Controller:  app/controllers/${name}Controller.js`);
+  console.log(`   - Routes:      app/routes/${routeFileName}`);
+
   if (orm === "prisma") {
     console.log(
-      "💡 Action Required: Run 'npx prisma generate' to update your Prisma Client."
+      "\n💡 Action Required: Run 'npx prisma generate' to update your Prisma Client."
+    );
+  }
+}
+
+async function updateResource(resourceName, methodName) {
+  const projectPath = process.cwd();
+  console.log(`\n🚀 Updating resource: ${resourceName}...`);
+  const capitalizedName =
+    resourceName.charAt(0).toUpperCase() + resourceName.slice(1);
+  const controllerName = `${capitalizedName}Controller`;
+  const controllerPath = path.join(
+    projectPath,
+    `app/controllers/${controllerName}.js`
+  );
+  const routePath = path.join(
+    projectPath,
+    `app/routes/${capitalizedName.toLowerCase()}Routes.js`
+  );
+
+  if (!fs.existsSync(controllerPath)) {
+    console.error(`❌ Error: Controller not found at ${controllerPath}`);
+    return;
+  }
+  if (!fs.existsSync(routePath)) {
+    console.error(`❌ Error: Route file not found at ${routePath}`);
+    return;
+  }
+
+  // Append method to controller
+  const newMethod = `\n  async ${methodName}(req, res, next) {\n    // TODO: Implement ${methodName} logic\n    try {\n      res.status(501).json({ message: 'Not Implemented' });\n    } catch (error) {\n      next(error);\n    }\n  }\n`;
+  let controllerContent = fs.readFileSync(controllerPath, "utf8");
+  const lastBraceIndex = controllerContent.lastIndexOf("}");
+  controllerContent =
+    controllerContent.substring(0, lastBraceIndex) +
+    newMethod +
+    controllerContent.substring(lastBraceIndex);
+  fs.writeFileSync(controllerPath, controllerContent);
+  console.log(`✅ Added method '${methodName}' to ${controllerName}.`);
+
+  // Append route to router file
+  const newRoute = `\nrouter.get('/${methodName.toLowerCase()}', ${controllerName}.${methodName});`;
+  fs.appendFileSync(routePath, EOL + newRoute);
+  console.log(
+    `✅ Added route for '${methodName}' in ${path.basename(routePath)}.`
+  );
+  console.log(
+    `\n💡 Action Required: Review the new method in the controller and implement its logic.`
+  );
+}
+
+function registerRoute(resourceName, routeFileName, projectPath) {
+  const mainRouterPath = path.join(projectPath, "app/routes/index.js");
+  try {
+    let mainRouterContent = fs.readFileSync(mainRouterPath, "utf-8");
+    const hook = "// [Coding express-cli-hook] - Add new routes here";
+    const newRouteImport = `const ${resourceName}Routes = require('./${routeFileName}');`;
+    const newRouteUsage = `router.use('/${resourceName}', ${resourceName}Routes);`;
+    if (!mainRouterContent.includes(newRouteImport)) {
+      mainRouterContent = mainRouterContent.replace(
+        hook,
+        `${newRouteImport}\n${newRouteUsage}\n\n${hook}`
+      );
+      fs.writeFileSync(mainRouterPath, mainRouterContent);
+      console.log(
+        `✅ Automatically registered '${resourceName}' routes in app/routes/index.js`
+      );
+    } else {
+      console.log(`🟡 Route for '${resourceName}' already registered.`);
+    }
+  } catch (err) {
+    console.error(
+      `\n❌ Error: Could not auto-register routes. Please import and use the new route in 'app/routes/index.js'.\n   Example:\n   const ${resourceName}Routes = require('./${routeFileName}');\n   router.use('/${resourceName}', ${resourceName}Routes);\n`
     );
   }
 }
@@ -275,10 +734,6 @@ async function createResource(name, orm) {
 async function installDependencies(orm, projectPath) {
   console.log("📦 Installing dependencies... This might take a moment.");
   try {
-    execSync("npm install inquirer@^8.2.4", {
-      cwd: projectPath,
-      stdio: "inherit",
-    });
     execSync("npm install", { cwd: projectPath, stdio: "inherit" });
     console.log("✅ Dependencies installed successfully.");
 
@@ -334,9 +789,11 @@ async function scaffoldAuth(orm, projectPath) {
     );
   } else {
     const schemaPath = path.join(projectPath, "prisma/schema.prisma");
-    const userModel = getPrismaUserModelTemplate();
-    fs.appendFileSync(schemaPath, EOL + userModel);
-    console.log(`✅ Appended User model to prisma/schema.prisma`);
+    if (!fs.readFileSync(schemaPath, "utf8").includes("model User")) {
+      const userModel = getPrismaUserModelTemplate();
+      fs.appendFileSync(schemaPath, EOL + userModel);
+      console.log(`✅ Appended User model to prisma/schema.prisma`);
+    }
   }
 
   createFile(
@@ -392,27 +849,27 @@ function createFile(filePath, content) {
   console.log(`Created file: ${filePath}`);
 }
 
-function createController(name, orm) {
+function createController(name, orm, projectPath) {
   const modelName = name.replace("Controller", "");
   createFile(
-    `app/controllers/${name}Controller.js`,
+    path.join(projectPath, `app/controllers/${name}Controller.js`),
     getControllerTemplate(modelName, orm)
   );
   createFile(
-    `app/validators/${modelName}Validator.js`,
+    path.join(projectPath, `app/validators/${modelName}Validator.js`),
     getValidatorTemplate(modelName)
   );
 }
 
-async function createModel(name, orm, options) {
+async function createModel(name, orm, options, projectPath) {
   if (orm === "mongoose") {
     const connectionName = options.connection || "default";
     createFile(
-      `app/models/${name}.js`,
+      path.join(projectPath, `app/models/${name}.js`),
       getMongooseModelTemplate(name, connectionName)
     );
   } else if (orm === "prisma") {
-    const schemaPath = "prisma/schema.prisma";
+    const schemaPath = path.join(projectPath, "prisma/schema.prisma");
     if (!fs.existsSync(schemaPath)) {
       console.error("Error: prisma/schema.prisma not found.");
       process.exit(1);
@@ -423,14 +880,16 @@ async function createModel(name, orm, options) {
   }
 }
 
-function createRouteFile(name) {
+function createRouteFile(name, routeFileName, projectPath) {
   const controllerName = `${
     name.charAt(0).toUpperCase() + name.slice(1)
   }Controller`;
+  const actualRouteFileName = routeFileName || `${name}Routes.js`;
   createFile(
-    `app/routes/${name}Routes.js`,
+    path.join(projectPath, `app/routes/${actualRouteFileName}`),
     getRouteTemplate(name, controllerName)
   );
+  registerRoute(name, actualRouteFileName, projectPath);
 }
 
 // --- FULL TEMPLATE GENERATORS ---
@@ -446,6 +905,8 @@ function getPackageJsonTemplate(appName, orm) {
     nodemailer: "^6.9.15",
     twilio: "^5.3.3",
     inquirer: "^8.2.4",
+    "js-yaml": "^4.1.0",
+    "swagger-parser": "^10.0.3",
   };
 
   const devDependencies = {
@@ -705,64 +1166,23 @@ function getMongooseControllerTemplate(controllerClassName, modelName) {
 
 class ${controllerClassName} {
   async index(req, res, next) {
-    try {
-      const Model = await getModel();
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit) || 10;
-      const skip = (page - 1) * limit;
-
-      const [items, totalItems] = await Promise.all([
-        Model.find().skip(skip).limit(limit).lean(),
-        Model.countDocuments(),
-      ]);
-      
-      const totalPages = Math.ceil(totalItems / limit);
-
-      res.status(200).json({
-        message: '${modelName} list retrieved successfully',
-        data: items,
-        pagination: { totalItems, totalPages, currentPage: page, itemsPerPage: limit },
-      });
-    } catch (error) { next(error); }
+    ${getControllerMethodBody("index", modelName, "mongoose")}
   }
 
   async store(req, res, next) {
-    try {
-      const Model = await getModel();
-      const item = new Model(req.body);
-      await item.save();
-      res.status(201).json({ message: '${modelName} created successfully', data: item });
-    } catch (error) { next(error); }
+    ${getControllerMethodBody("store", modelName, "mongoose")}
   }
 
   async show(req, res, next) {
-    try {
-      const { id } = req.params;
-      const Model = await getModel();
-      const item = await Model.findById(id).lean();
-      if (!item) return res.status(404).json({ message: '${modelName} not found' });
-      res.status(200).json({ message: '${modelName} retrieved successfully', data: item });
-    } catch (error) { next(error); }
+    ${getControllerMethodBody("show", modelName, "mongoose")}
   }
 
   async update(req, res, next) {
-    try {
-      const { id } = req.params;
-      const Model = await getModel();
-      const item = await Model.findByIdAndUpdate(id, req.body, { new: true, runValidators: true });
-      if (!item) return res.status(404).json({ message: '${modelName} not found' });
-      res.status(200).json({ message: '${modelName} updated successfully', data: item });
-    } catch (error) { next(error); }
+    ${getControllerMethodBody("update", modelName, "mongoose")}
   }
 
   async destroy(req, res, next) {
-    try {
-      const { id } = req.params;
-      const Model = await getModel();
-      const item = await Model.findByIdAndDelete(id);
-      if (!item) return res.status(404).json({ message: '${modelName} not found' });
-      res.status(200).json({ message: '${modelName} deleted successfully' });
-    } catch (error) { next(error); }
+    ${getControllerMethodBody("destroy", modelName, "mongoose")}
   }
 }
 
@@ -774,59 +1194,26 @@ function getPrismaControllerTemplate(controllerClassName, modelName) {
   const modelClientName =
     modelName.charAt(0).toLowerCase() + modelName.slice(1);
   return `const { prisma } = require('../../config/database');
-const modelClient = prisma.${modelClientName};
 
 class ${controllerClassName} {
   async index(req, res, next) {
-    try {
-      const page = parseInt(req.query.page) || 1;
-      const limit = parseInt(req.query.limit) || 10;
-      const skip = (page - 1) * limit;
-
-      const [items, totalItems] = await prisma.$transaction([
-        modelClient.findMany({ skip, take: limit }),
-        modelClient.count(),
-      ]);
-
-      const totalPages = Math.ceil(totalItems / limit);
-      res.status(200).json({
-        message: '${modelName} list retrieved successfully',
-        data: items,
-        pagination: { totalItems, totalPages, currentPage: page, itemsPerPage: limit },
-      });
-    } catch (error) { next(error); }
+    ${getControllerMethodBody("index", modelName, "prisma")}
   }
 
   async store(req, res, next) {
-    try {
-      const item = await modelClient.create({ data: req.body });
-      res.status(201).json({ message: '${modelName} created successfully', data: item });
-    } catch (error) { next(error); }
+    ${getControllerMethodBody("store", modelName, "prisma")}
   }
 
   async show(req, res, next) {
-    try {
-      const item = await modelClient.findUnique({ where: { id: parseInt(req.params.id) } });
-      if (!item) return res.status(404).json({ message: '${modelName} not found' });
-      res.status(200).json({ message: '${modelName} retrieved successfully', data: item });
-    } catch (error) { next(error); }
+    ${getControllerMethodBody("show", modelName, "prisma")}
   }
 
   async update(req, res, next) {
-    try {
-      const item = await modelClient.update({
-        where: { id: parseInt(req.params.id) },
-        data: req.body,
-      });
-      res.status(200).json({ message: '${modelName} updated successfully', data: item });
-    } catch (error) { next(error); }
+    ${getControllerMethodBody("update", modelName, "prisma")}
   }
 
   async destroy(req, res, next) {
-    try {
-      await modelClient.delete({ where: { id: parseInt(req.params.id) } });
-      res.status(200).json({ message: '${modelName} deleted successfully' });
-    } catch (error) { next(error); }
+    ${getControllerMethodBody("destroy", modelName, "prisma")}
   }
 }
 
@@ -834,16 +1221,20 @@ module.exports = new ${controllerClassName}();
 `;
 }
 
-function getMongooseModelTemplate(name, conn) {
+function getMongooseModelTemplate(
+  name,
+  conn,
+  fields = `{
+    name: { type: String, required: true, trim: true },
+    // Add more fields here
+  }`
+) {
   return `const mongoose = require('mongoose');
 const { Schema } = mongoose;
 const { getConnection } = require('../../config/database');
 
 const ${name.toLowerCase()}Schema = new Schema(
-  {
-    name: { type: String, required: true, trim: true },
-    // Add more fields here
-  },
+  ${fields},
   { timestamps: true }
 );
 
@@ -860,7 +1251,7 @@ function getPrismaModelTemplate(name) {
   name      String
   // Add other fields here, e.g.,
   // description String?
-  // price     Float    @default(0)
+  // price       Float    @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -991,7 +1382,7 @@ UserSchema.pre('save', async function (next) {
   if (this.isModified('password') && this.password) {
     this.password = await bcrypt.hash(this.password, 10);
   }
-   if (this.isModified('otp') && this.otp && this.otp.length < 10) {
+    if (this.isModified('otp') && this.otp && this.otp.length < 10) {
     this.otp = await bcrypt.hash(this.otp, 10);
   }
   if (this.isModified('refreshToken') && this.refreshToken && this.refreshToken.length < 100) {
@@ -1082,7 +1473,7 @@ const sendOtpMessage = async (type, recipient, otp) => {
     try {
         if(process.env.TWILIO_ACCOUNT_SID !== 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx') {
             await twilioClient.messages.create({
-                body: \`Your Coding express App OTP is: \${otp}\`,
+                body: \`Your OTP for Coding express App is: \${otp}\`,
                 from: process.env.TWILIO_PHONE_NUMBER,
                 to: recipient
             });
@@ -1389,7 +1780,7 @@ const sendOtpMessage = async (type, recipient, otp) => {
     try {
         if(process.env.TWILIO_ACCOUNT_SID !== 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx') {
             await twilioClient.messages.create({
-                body: \`Your Coding express App OTP is: \${otp}\`,
+                body: \`Your OTP for Coding express App is: \${otp}\`,
                 from: process.env.TWILIO_PHONE_NUMBER,
                 to: recipient
             });
@@ -1715,6 +2106,149 @@ module.exports = authValidator;
 `;
 }
 
+function getReadmeTemplate(appName) {
+  return `# ${appName}
+
+
+## Overview
+
+A modern, scalable, and robust backend server built with Node.js and Express. It comes pre-configured with a complete authentication system, ORM integration (Mongoose or Prisma), and a structured, maintainable architecture.
+
+This project was bootstrapped from the ground up to provide a solid foundation for your next big idea, allowing you to focus on features instead of boilerplate.
+
+## Features
+
+-   **Robust Routing**: A clean and organized routing system.
+-   **ORM Integration**: Choose between **Mongoose** (for MongoDB) or **Prisma** (for SQL/NoSQL databases) during project setup.
+-   **Full Authentication**: Secure, token-based authentication (JWT) is built-in, including:
+    -   Registration (Email/Password or Phone/OTP)
+    -   Login (Password or OTP)
+    -   Forgot/Reset Password Flow
+    -   Access & Refresh Tokens
+    -   Protected Routes Middleware
+-   **Validation**: Per-route validation using \`express-validator\`.
+-   **Environment-based Configuration**: Uses \`.env\` files for easy configuration.
+-   **Structured Logging & Error Handling**: Centralized error handling middleware.
+-   **Automatic Scaffolding**: Use the CLI to generate models, controllers, validators, and routes.
+-   **OpenAPI Generation**: Initialize an entire project's boilerplate directly from an OpenAPI (Swagger) specification file.
+
+## Prerequisites
+
+-   Node.js (v16 or higher)
+-   npm or yarn
+-   MongoDB or a Prisma-compatible database (e.g., PostgreSQL)
+
+## Getting Started
+
+### 2. Environment Configuration
+
+Rename the \`.env.example\` file to \`.env\` and update the variables, especially your database connection string and JWT secrets.
+
+\`\`\`dotenv
+# server port
+PORT=3000
+
+# Database URI (check config/database.js for details)
+# For Mongoose:
+DB_URI_DEFAULT=mongodb://127.0.0.1:27017/${appName.toLowerCase()}
+# For Prisma:
+# DATABASE_URL="postgresql://user:password@localhost:5432/${appName.toLowerCase()}?schema=public"
+
+# --- Authentication ---
+# Secret key for JWT authentication
+JWT_SECRET=your-super-secret-key-change-me
+# Secret key for JWT Refresh Token authentication
+JWT_REFRESH_SECRET=your-refresh-super-secret-key-change-me
+REFRESH_TOKEN_EXPIRY_DAYS=7
+...
+\`\`\`
+
+### 3. Running the Application
+
+-   **Development Mode**:
+    \`\`\`bash
+    npm run dev
+    \`\`\`
+    This starts the server with \`nodemon\`, which will automatically restart on file changes.
+
+-   **Production Mode**:
+    \`\`\`bash
+    npm start
+    \`\`\`
+
+The server will be running at \`http://localhost:3000\`.
+
+## Project Structure
+
+\`\`\`
+${appName}/
+├── app/
+│   ├── controllers/    # Handles request logic
+│   ├── middleware/     # Custom Express middleware (e.g., auth)
+│   ├── models/         # Mongoose models (if using Mongoose)
+│   └── routes/         # Route definitions
+│   └── validators/     # Request validation rules
+├── config/             # Configuration files (e.g., database)
+├── prisma/             # Prisma schema and migrations (if using Prisma)
+├── public/             # Static assets
+├── .env                # Environment variables (gitignored)
+├── server.js           # Main application entry point
+├── package.json
+└── README.md
+\`\`\`
+
+## Using the CLI (Coding Express)
+
+This project is best managed with the accompanying \`codingexpress-cli\`.
+
+### Scaffolding a New Resource
+
+To create a new resource (Model, Controller, Validator, and Routes) in one command, run:
+
+\`\`\`bash
+# Run from the project root
+codingexpress make:resource Product
+\`\`\`
+
+This will create:
+-   \`app/models/Product.js\` (or add to \`prisma.schema\`)
+-   \`app/controllers/ProductController.js\`
+-   \`app/validators/ProductValidator.js\`
+-   \`app/routes/productRoutes.js\`
+
+**Important**: After creating a resource, you must register its routes in \`app/routes/index.js\`:
+
+\`\`\`javascript
+// in app/routes/index.js
+const productRoutes = require('./productRoutes.js');
+// ...
+router.use('/products', productRoutes);
+\`\`\`
+
+## API Endpoints
+
+The API is versioned under the \`/api\` prefix.
+
+### Authentication Endpoints
+
+-   \`POST /api/auth/register\` - Register a new user.
+-   \`POST /api/auth/login\` - Log in and receive tokens.
+-   \`POST /api/auth/send-otp\` - Send an OTP for login or password reset.
+-   \`POST /api/auth/refresh-token\` - Get a new access token using a refresh token.
+-   \`POST /api/auth/forgot-password\`
+-   \`POST /api/auth/reset-password\`
+-   \`GET /api/auth/profile\` - (Protected) Get the current user's profile.
+
+### Other Resources
+
+(Add details about your other resource endpoints here as you create them)
+
+---
+
+Happy Coding!
+`;
+}
+
 function getPostmanCollectionTemplate(appName) {
   return JSON.stringify(
     {
@@ -1764,19 +2298,22 @@ function displayHelp() {
 Coding express CLI - A Laravel-like tool for Express.js
 
 Usage:
-    codingexpress init
-    codingexpress <command> [names...] [options]
+    codingexpress <command> [arguments] [options]
 
 Available Commands:
-    init                           Initializes a new project by asking for the name and ORM.
+    init [openapi_file]                 Initializes a new project. If an OpenAPI file is provided,
+                                        it scaffolds the project based on the specification.
 
-    make:resource <Name...>        Creates a model, validator, controller, and route.
-                                   (Run inside a project directory)
-    
-    // ... other make commands
+    make:resource <Name...>             Creates a Model, Validator, Controller, and Route file.
+    make:controller <Name...>           Creates a new controller file.
+    make:model <Name...>                Creates a new model file or appends to the Prisma schema.
+    make:route <Name...>                Creates a new route file.
+
+    update:resource <Resource.method>   Adds a new method to an existing resource controller and route.
+                                        Example: codingexpress update:resource Product.findByCategory
 
 Options:
-    --orm=<orm_name>               (For make commands) Specify the ORM ('mongoose' or 'prisma').
-    --connection=<name>            (Mongoose only) Specifies the database connection.
+    --orm=<orm_name>                    (For make commands) Specify the ORM ('mongoose' or 'prisma').
+    --connection=<name>                 (Mongoose only) Specifies the database connection.
   `);
 }
