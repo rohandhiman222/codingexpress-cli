@@ -151,6 +151,14 @@ codingexpress make:resource Product Order --connection=secondary
 - `app/routes/productRoutes.js`, `app/routes/orderRoutes.js`
 - Updates `app/routes/index.js`
 
+## API Documentation
+
+While in development mode, an interactive API documentation page is available, powered by Swagger UI.
+
+-   **URL**: [\`http://localhost:3000/api-docs\`](http://localhost:3000/api-docs)
+
+This page is automatically generated from the \`openapi.yaml\` file in the project's root directory. Any changes to this file will be reflected in the documentation.
+
 ## OpenAPI Integration
 
 When an OpenAPI file is provided with `codingexpress init ./path/to/api.yaml`, the CLI generates a complete application by processing the specification as follows:

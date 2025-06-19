@@ -72,9 +72,8 @@ const feature = parts.length > 1 ? parts[1] : null;
       for (const name of names) {
         await handleMakeCommand(type, name, makeOptions);
       }
-      break;
+      break; // NEW: Handle the update:resource command
 
-    // NEW: Handle the update:resource command
     case "update":
       if (feature === "resource") {
         const resourceArg = args[1];
@@ -175,17 +174,17 @@ async function initFromOpenAPI(filePath) {
       `Error: Directory '${appName}' already exists at ${projectPath}`
     );
     process.exit(1);
-  }
+  } // Create project structure and core files
 
-  // Create project structure and core files
   createProjectStructure(projectPath, orm);
-  createCoreFiles(projectPath, appName, orm);
+  createCoreFiles(projectPath, appName, orm); // NEW: Copy the user's OpenAPI file into the project
 
-  // Generate all resources from the parsed spec
+  fs.copyFileSync(filePath, path.join(projectPath, "openapi.yaml"));
+  console.log("✅ Copied OpenAPI spec to project root."); // Generate all resources from the parsed spec
+
   await generateModelsFromSpec(spec, orm, projectPath);
-  await generateRoutesAndControllersFromSpec(spec, orm, projectPath);
+  await generateRoutesAndControllersFromSpec(spec, orm, projectPath); // Scaffold standard auth and install dependencies
 
-  // Scaffold standard auth and install dependencies
   await scaffoldAuth(orm, projectPath);
   await installDependencies(orm, projectPath);
   startDevServer(projectPath);
@@ -282,7 +281,12 @@ async function initProject() {
   }
 
   createProjectStructure(projectPath, orm);
-  createCoreFiles(projectPath, appName, orm);
+  createCoreFiles(projectPath, appName, orm); // NEW: Create a placeholder OpenAPI file for standard init
+
+  createFile(
+    path.join(projectPath, "openapi.yaml"),
+    getPlaceholderOpenAPITemplate(appName)
+  );
 
   createFile(
     path.join(projectPath, ".prettierrc"),
@@ -306,7 +310,193 @@ async function initProject() {
   startDevServer(projectPath);
 }
 
-// --- OpenAPI Generation ---
+// --- OpenAPI Generation & Update ---
+
+function updateOpenAPI(resourceName, projectPath) {
+  const openapiPath = path.join(projectPath, "openapi.yaml");
+  if (!fs.existsSync(openapiPath)) {
+    console.log("🟡 openapi.yaml not found, skipping update.");
+    return;
+  }
+
+  try {
+    const doc = yaml.load(fs.readFileSync(openapiPath, "utf8"));
+
+    if (!doc.paths) doc.paths = {};
+    if (!doc.components) doc.components = {};
+    if (!doc.components.schemas) doc.components.schemas = {};
+
+    const lowerResource = resourceName.toLowerCase();
+    const pluralResource = lowerResource.endsWith("s")
+      ? lowerResource
+      : `${lowerResource}s`;
+
+    if (!doc.components.schemas[resourceName]) {
+      doc.components.schemas[resourceName] = {
+        type: "object",
+        properties: {
+          id: { type: "string", readOnly: true },
+          name: { type: "string" },
+        },
+        required: ["name"],
+      };
+    }
+
+    const securityScheme = [{ bearerAuth: [] }];
+
+    const pathsToAdd = {
+      [`/api/${pluralResource}`]: {
+        get: {
+          tags: [resourceName],
+          summary: `List all ${pluralResource}`,
+          operationId: `list${resourceName}`,
+          security: securityScheme,
+          responses: { 200: { description: "Successful operation" } },
+        },
+        post: {
+          tags: [resourceName],
+          summary: `Create a new ${resourceName}`,
+          operationId: `create${resourceName}`,
+          security: securityScheme,
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: `#/components/schemas/${resourceName}` },
+              },
+            },
+          },
+          responses: { 201: { description: "Resource created" } },
+        },
+      },
+      [`/api/${pluralResource}/{id}`]: {
+        get: {
+          tags: [resourceName],
+          summary: `Get a ${resourceName} by ID`,
+          operationId: `get${resourceName}ById`,
+          security: securityScheme,
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: { 200: { description: "Successful operation" } },
+        },
+        put: {
+          tags: [resourceName],
+          summary: `Update a ${resourceName} by ID`,
+          operationId: `update${resourceName}`,
+          security: securityScheme,
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: `#/components/schemas/${resourceName}` },
+              },
+            },
+          },
+          responses: { 200: { description: "Resource updated" } },
+        },
+        delete: {
+          tags: [resourceName],
+          summary: `Delete a ${resourceName} by ID`,
+          operationId: `delete${resourceName}`,
+          security: securityScheme,
+          parameters: [
+            {
+              name: "id",
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            },
+          ],
+          responses: { 204: { description: "Resource deleted" } },
+        },
+      },
+    };
+
+    for (const path in pathsToAdd) {
+      if (!doc.paths[path]) {
+        doc.paths[path] = pathsToAdd[path];
+      }
+    }
+
+    fs.writeFileSync(openapiPath, yaml.dump(doc, { indent: 2 }));
+    console.log(`✅ Updated openapi.yaml with resource '${resourceName}'.`);
+  } catch (e) {
+    console.error(`❌ Failed to update openapi.yaml: ${e.message}`);
+  }
+}
+
+/**
+ * NEW: This function updates the openapi.yaml file for a new method
+ * added via the `update:resource` command.
+ */
+async function updateOpenAPIForNewMethod(
+  capitalizedName,
+  methodName,
+  httpMethod,
+  projectPath
+) {
+  const openapiPath = path.join(projectPath, "openapi.yaml");
+  if (!fs.existsSync(openapiPath)) {
+    console.log("🟡 openapi.yaml not found, skipping update.");
+    return;
+  }
+
+  try {
+    const doc = yaml.load(fs.readFileSync(openapiPath, "utf8"));
+    if (!doc.paths) doc.paths = {};
+
+    const lowerResource = capitalizedName.toLowerCase();
+    const pluralResource = lowerResource.endsWith("s")
+      ? lowerResource
+      : `${lowerResource}s`;
+
+    const newPathKey = `/api/${pluralResource}/${methodName.toLowerCase()}`;
+    const operationId = `${methodName}${capitalizedName}`;
+
+    const newPathObject = {
+      [httpMethod.toLowerCase()]: {
+        tags: [capitalizedName],
+        summary: `Custom action: ${methodName}`,
+        description: `Handles the ${methodName} action for the ${capitalizedName} resource.`,
+        operationId: operationId,
+        security: [{ bearerAuth: [] }],
+        responses: {
+          200: { description: "Successful response" },
+          501: { description: "Not Implemented" },
+        },
+      },
+    };
+
+    if (doc.paths[newPathKey]) {
+      doc.paths[newPathKey] = { ...doc.paths[newPathKey], ...newPathObject };
+    } else {
+      doc.paths[newPathKey] = newPathObject;
+    }
+
+    fs.writeFileSync(openapiPath, yaml.dump(doc, { indent: 2 }));
+    console.log(
+      `✅ Updated openapi.yaml with new method: ${httpMethod.toUpperCase()} ${newPathKey}`
+    );
+  } catch (e) {
+    console.error(
+      `❌ Failed to update openapi.yaml for new method: ${e.message}`
+    );
+  }
+}
 
 function openApiTypeToMongooseType(openApiType) {
   const typeMap = {
@@ -341,6 +531,18 @@ async function generateModelsFromSpec(spec, orm, projectPath) {
   }
 
   for (const schemaName in schemas) {
+    // FIX: Skip auth-related schemas as they are handled by scaffoldAuth
+    if (
+      [
+        "User",
+        "LoginRequest",
+        "RefreshTokenRequest",
+        "ResetPasswordRequest",
+      ].includes(schemaName)
+    ) {
+      continue;
+    }
+
     const schema = schemas[schemaName];
     if (schema.type !== "object" || !schema.properties) continue;
 
@@ -353,12 +555,12 @@ async function generateModelsFromSpec(spec, orm, projectPath) {
           ? ", required: true"
           : "";
         const trim = prop.type === "string" ? ", trim: true" : "";
-        modelFields += `\n    ${propName}: { type: ${type}${required}${trim} },`;
+        modelFields += `\n    ${propName}: { type: ${type}${required}${trim} },`;
       }
       const modelPath = path.join(projectPath, `app/models/${schemaName}.js`);
       createFile(
         modelPath,
-        getMongooseModelTemplate(schemaName, "default", `{${modelFields}\n  }`)
+        getMongooseModelTemplate(schemaName, "default", `{${modelFields}\n  }`)
       );
     } else if (orm === "prisma") {
       let modelFields = "";
@@ -368,9 +570,9 @@ async function generateModelsFromSpec(spec, orm, projectPath) {
         const prop = schema.properties[propName];
         const type = openApiTypeToPrismaType(prop);
         const optional = schema.required?.includes(propName) ? "" : "?";
-        modelFields += `\n  ${propName.padEnd(12)}${type}${optional}`;
+        modelFields += `\n  ${propName.padEnd(12)}${type}${optional}`;
       }
-      const modelTemplate = `model ${schemaName} {\n  id          Int      @id @default(autoincrement())\n  ${modelFields}\n\n  createdAt   DateTime @default(now())\n  updatedAt   DateTime @updatedAt\n}`;
+      const modelTemplate = `model ${schemaName} {\n  id          Int      @id @default(autoincrement())\n  ${modelFields}\n\n  createdAt   DateTime @default(now())\n  updatedAt   DateTime @updatedAt\n}`;
       const schemaPath = path.join(projectPath, "prisma/schema.prisma");
       fs.appendFileSync(schemaPath, EOL + EOL + modelTemplate);
       console.log(`✅ Appended Prisma model '${schemaName}' to ${schemaPath}`);
@@ -397,57 +599,57 @@ function identifyCrudType(operationId, httpMethod, route) {
 function getControllerMethodBody(crudType, modelName, orm) {
   const modelNameLower = modelName.charAt(0).toLowerCase() + modelName.slice(1);
   const mongooseSearch = `
-      const { page = 1, limit = 10, ...filters } = req.query;
-      const query = {};
-      // Example: search by fields, could be extended for regex, etc.
-      for (const key in filters) {
-        if (Object.prototype.hasOwnProperty.call(filters, key)) {
-          query[key] = { $regex: filters[key], $options: 'i' };
-        }
-      }
-      const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-      const [items, totalItems] = await Promise.all([
-        Model.find(query).skip(skip).limit(parseInt(limit, 10)).lean(),
-        Model.countDocuments(query),
-      ]);`;
+      const { page = 1, limit = 10, ...filters } = req.query;
+      const query = {};
+      // Example: search by fields, could be extended for regex, etc.
+      for (const key in filters) {
+        if (Object.prototype.hasOwnProperty.call(filters, key)) {
+          query[key] = { $regex: filters[key], $options: 'i' };
+        }
+      }
+      const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+      const [items, totalItems] = await Promise.all([
+        Model.find(query).skip(skip).limit(parseInt(limit, 10)).lean(),
+        Model.countDocuments(query),
+      ]);`;
 
   const prismaSearch = `
-      const { page = 1, limit = 10, ...filters } = req.query;
-      const where = {};
-      // Example: search by fields, could be extended for different modes.
-      for (const key in filters) {
-        if (Object.prototype.hasOwnProperty.call(filters, key)) {
-          where[key] = { contains: filters[key], mode: 'insensitive' };
-        }
-      }
-      const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
-      const [items, totalItems] = await prisma.$transaction([
-        prisma.${modelNameLower}.findMany({ where, skip, take: parseInt(limit, 10) }),
-        prisma.${modelNameLower}.count({ where }),
-      ]);`;
+      const { page = 1, limit = 10, ...filters } = req.query;
+      const where = {};
+      // Example: search by fields, could be extended for different modes.
+      for (const key in filters) {
+        if (Object.prototype.hasOwnProperty.call(filters, key)) {
+          where[key] = { contains: filters[key], mode: 'insensitive' };
+        }
+      }
+      const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+      const [items, totalItems] = await prisma.$transaction([
+        prisma.${modelNameLower}.findMany({ where, skip, take: parseInt(limit, 10) }),
+        prisma.${modelNameLower}.count({ where }),
+      ]);`;
 
   const templates = {
     mongoose: {
-      index: `try {\n      const Model = await getModel();\n      ${mongooseSearch}\n      const totalPages = Math.ceil(totalItems / parseInt(limit, 10));\n      res.status(200).json({ message: '${modelName} list retrieved successfully', data: items, pagination: { totalItems, totalPages, currentPage: parseInt(page, 10), itemsPerPage: parseInt(limit, 10) } });\n    } catch (error) { next(error); }`,
-      store: `try {\n      const Model = await getModel();\n      const item = new Model(req.body);\n      await item.save();\n      res.status(201).json({ message: '${modelName} created successfully', data: item });\n    } catch (error) { next(error); }`,
-      show: `try {\n      const { id } = req.params;\n      const Model = await getModel();\n      const item = await Model.findById(id).lean();\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} retrieved successfully', data: item });\n    } catch (error) { next(error); }`,
-      update: `try {\n      const { id } = req.params;\n      const Model = await getModel();\n      const item = await Model.findByIdAndUpdate(id, req.body, { new: true, runValidators: true });\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} updated successfully', data: item });\n    } catch (error) { next(error); }`,
-      destroy: `try {\n      const { id } = req.params;\n      const Model = await getModel();\n      const item = await Model.findByIdAndDelete(id);\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} deleted successfully' });\n    } catch (error) { next(error); }`,
+      index: `try {\n      const Model = await getModel();\n      ${mongooseSearch}\n      const totalPages = Math.ceil(totalItems / parseInt(limit, 10));\n      res.status(200).json({ message: '${modelName} list retrieved successfully', data: items, pagination: { totalItems, totalPages, currentPage: parseInt(page, 10), itemsPerPage: parseInt(limit, 10) } });\n    } catch (error) { next(error); }`,
+      store: `try {\n      const Model = await getModel();\n      const item = new Model(req.body);\n      await item.save();\n      res.status(201).json({ message: '${modelName} created successfully', data: item });\n    } catch (error) { next(error); }`,
+      show: `try {\n      const { id } = req.params;\n      const Model = await getModel();\n      const item = await Model.findById(id).lean();\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} retrieved successfully', data: item });\n    } catch (error) { next(error); }`,
+      update: `try {\n      const { id } = req.params;\n      const Model = await getModel();\n      const item = await Model.findByIdAndUpdate(id, req.body, { new: true, runValidators: true });\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} updated successfully', data: item });\n    } catch (error) { next(error); }`,
+      destroy: `try {\n      const { id } = req.params;\n      const Model = await getModel();\n      const item = await Model.findByIdAndDelete(id);\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} deleted successfully' });\n    } catch (error) { next(error); }`,
     },
     prisma: {
-      index: `try {\n      ${prismaSearch}\n      const totalPages = Math.ceil(totalItems / parseInt(limit, 10));\n      res.status(200).json({ message: '${modelName} list retrieved successfully', data: items, pagination: { totalItems, totalPages, currentPage: parseInt(page, 10), itemsPerPage: parseInt(limit, 10) } });\n    } catch (error) { next(error); }`,
-      store: `try {\n      const item = await prisma.${modelNameLower}.create({ data: req.body });\n      res.status(201).json({ message: '${modelName} created successfully', data: item });\n    } catch (error) { next(error); }`,
-      show: `try {\n      const item = await prisma.${modelNameLower}.findUnique({ where: { id: parseInt(req.params.id, 10) } });\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} retrieved successfully', data: item });\n    } catch (error) { next(error); }`,
-      update: `try {\n      const item = await prisma.${modelNameLower}.update({ where: { id: parseInt(req.params.id, 10) }, data: req.body });\n      res.status(200).json({ message: '${modelName} updated successfully', data: item });\n    } catch (error) { next(error); }`,
-      destroy: `try {\n      await prisma.${modelNameLower}.delete({ where: { id: parseInt(req.params.id, 10) } });\n      res.status(200).json({ message: '${modelName} deleted successfully' });\n    } catch (error) { next(error); }`,
+      index: `try {\n      ${prismaSearch}\n      const totalPages = Math.ceil(totalItems / parseInt(limit, 10));\n      res.status(200).json({ message: '${modelName} list retrieved successfully', data: items, pagination: { totalItems, totalPages, currentPage: parseInt(page, 10), itemsPerPage: parseInt(limit, 10) } });\n    } catch (error) { next(error); }`,
+      store: `try {\n      const item = await prisma.${modelNameLower}.create({ data: req.body });\n      res.status(201).json({ message: '${modelName} created successfully', data: item });\n    } catch (error) { next(error); }`,
+      show: `try {\n      const item = await prisma.${modelNameLower}.findUnique({ where: { id: parseInt(req.params.id, 10) } });\n      if (!item) return res.status(404).json({ message: '${modelName} not found' });\n      res.status(200).json({ message: '${modelName} retrieved successfully', data: item });\n    } catch (error) { next(error); }`,
+      update: `try {\n      const item = await prisma.${modelNameLower}.update({ where: { id: parseInt(req.params.id, 10) }, data: req.body });\n      res.status(200).json({ message: '${modelName} updated successfully', data: item });\n    } catch (error) { next(error); }`,
+      destroy: `try {\n      await prisma.${modelNameLower}.delete({ where: { id: parseInt(req.params.id, 10) } });\n      res.status(200).json({ message: '${modelName} deleted successfully' });\n    } catch (error) { next(error); }`,
     },
   };
   const custom = `// TODO: Implement this method
-    try {
-      res.status(501).json({ message: 'Not Implemented' });
-    } catch (error) {
-      next(error);
-    }`;
+    try {
+      res.status(501).json({ message: 'Not Implemented' });
+    } catch (error) {
+      next(error);
+    }`;
 
   return (templates[orm] && templates[orm][crudType]) || custom;
 }
@@ -483,16 +685,16 @@ async function generateValidatorFromSpec(resourceName, schema, projectPath) {
     }
     if (prop.type === "string") storeChain.push(".trim()");
 
-    validationRules.store.push(`  ${storeChain.join("")}`);
+    validationRules.store.push(`  ${storeChain.join("")}`);
     validationRules.update.push(
-      `  body('${propName}').optional()${storeChain.slice(1).join("")}`
+      `  body('${propName}').optional()${storeChain.slice(1).join("")}`
     );
   }
 
   const template = `const { body } = require('express-validator');\n
 const ${resourceName.toLowerCase()}Validator = {
-  store: [\n${validationRules.store.join(",\n")}\n  ],
-  update: [\n${validationRules.update.join(",\n")}\n  ],
+  store: [\n${validationRules.store.join(",\n")}\n  ],
+  update: [\n${validationRules.update.join(",\n")}\n  ],
 };\n
 module.exports = ${resourceName.toLowerCase()}Validator;`;
   createFile(
@@ -511,11 +713,12 @@ async function generateRoutesAndControllersFromSpec(spec, orm, projectPath) {
 
   const resources = {};
   for (const route in paths) {
-    const resourceNameGuess = (route.split("/")[1] || "").replace(
-      /[^a-zA-Z0-9]/g,
-      ""
-    );
+    // Improved resource name guessing from route
+    const segments = route.split("/").filter(Boolean);
+    if (segments.length < 2) continue; // Skip root paths like /api
+    const resourceNameGuess = segments[1].replace(/[^a-zA-Z0-9]/g, "");
     if (!resourceNameGuess) continue;
+
     const pathDetails = paths[route];
     const resourceName =
       pathDetails.get?.tags?.[0] ||
@@ -528,6 +731,14 @@ async function generateRoutesAndControllersFromSpec(spec, orm, projectPath) {
   }
 
   for (const resourceName in resources) {
+    // FIX: Skip regeneration of auth routes, which are handled by `scaffoldAuth`
+    if (resourceName === "Authentication") {
+      console.log(
+        `🟡 Skipping 'Authentication' resource, handled by scaffoldAuth.`
+      );
+      continue;
+    }
+
     const singularName = resourceName.endsWith("s")
       ? resourceName.slice(0, -1)
       : resourceName;
@@ -550,22 +761,27 @@ async function generateRoutesAndControllersFromSpec(spec, orm, projectPath) {
         if (!operation.operationId) continue;
 
         const crudType = identifyCrudType(operation.operationId, method, route);
-        controllerMethods += `\n  /**\n   * ${
+        controllerMethods += `\n  /**\n   * ${
           operation.summary || operation.operationId
-        }\n   */\n  async ${
+        }\n   */\n  async ${
           operation.operationId
-        }(req, res, next) {\n    ${getControllerMethodBody(
+        }(req, res, next) {\n    ${getControllerMethodBody(
           crudType,
           singularName,
           orm
-        )}\n  }\n`;
+        )}\n  }\n`;
 
-        const expressRoute = route.replace(/{/g, ":").replace(/}/g, "");
+        const expressRoute = route
+          .replace("/api", "")
+          .replace(/{/g, ":")
+          .replace(/}/g, "");
         const validatorMiddleware =
           schema && (crudType === "store" || crudType === "update")
             ? `${validatorName}.${crudType}, `
-            : "";
-        routeEntries += `router.${method}('${expressRoute}', ${validatorMiddleware}${controllerName}.${operation.operationId});\n`;
+            : ""; // Check if the route is for auth, if so don't add auth middleware
+        const isAuthRoute = route.includes("/auth/");
+        const authMiddlewareString = isAuthRoute ? "" : "authMiddleware, ";
+        routeEntries += `router.${method}('${expressRoute}', ${authMiddlewareString}${validatorMiddleware}${controllerName}.${operation.operationId});\n`;
       }
     }
 
@@ -583,7 +799,7 @@ async function generateRoutesAndControllersFromSpec(spec, orm, projectPath) {
       : `// TODO: Create and import validator for this resource`;
     createFile(
       path.join(projectPath, `app/routes/${routeFileName}`),
-      `const express = require('express');\nconst router = express.Router();\nconst ${controllerName} = require('../controllers/${controllerName}');\n${validatorImport}\n\n${routeEntries}\nmodule.exports = router;`
+      `const express = require('express');\nconst router = express.Router();\nconst ${controllerName} = require('../controllers/${controllerName}');\nconst authMiddleware = require('../middleware/authMiddleware');\n${validatorImport}\n\n${routeEntries}\nmodule.exports = router;`
     );
 
     registerRoute(lowerCaseResource, routeFileName, projectPath);
@@ -640,17 +856,17 @@ async function createResource(name, orm, projectPath) {
   createController(name, orm, projectPath);
   const routeFileName = `${name.toLowerCase()}Routes.js`;
   createRouteFile(name.toLowerCase(), routeFileName, projectPath);
-  // registerRoute is now called inside createRouteFile
+  updateOpenAPI(name, projectPath);
 
   console.log(`✅ Resource '${name}' created successfully!`);
   if (orm === "mongoose") {
-    console.log(`   - Model:       app/models/${name}.js`);
+    console.log(`   - Model:       app/models/${name}.js`);
   } else {
-    console.log(`   - Model:       (appended to prisma/schema.prisma)`);
+    console.log(`   - Model:       (appended to prisma/schema.prisma)`);
   }
-  console.log(`   - Validator:   app/validators/${name}Validator.js`);
-  console.log(`   - Controller:  app/controllers/${name}Controller.js`);
-  console.log(`   - Routes:      app/routes/${routeFileName}`);
+  console.log(`   - Validator:   app/validators/${name}Validator.js`);
+  console.log(`   - Controller:  app/controllers/${name}Controller.js`);
+  console.log(`   - Routes:      app/routes/${routeFileName}`);
 
   if (orm === "prisma") {
     console.log(
@@ -659,6 +875,9 @@ async function createResource(name, orm, projectPath) {
   }
 }
 
+/**
+ * UPDATED: This function now also triggers an update to the openapi.yaml file.
+ */
 async function updateResource(resourceName, methodName) {
   const projectPath = process.cwd();
   console.log(`\n🚀 Updating resource: ${resourceName}...`);
@@ -681,10 +900,9 @@ async function updateResource(resourceName, methodName) {
   if (!fs.existsSync(routePath)) {
     console.error(`❌ Error: Route file not found at ${routePath}`);
     return;
-  }
+  } // Append method to controller
 
-  // Append method to controller
-  const newMethod = `\n  async ${methodName}(req, res, next) {\n    // TODO: Implement ${methodName} logic\n    try {\n      res.status(501).json({ message: 'Not Implemented' });\n    } catch (error) {\n      next(error);\n    }\n  }\n`;
+  const newMethod = `\n  async ${methodName}(req, res, next) {\n    // TODO: Implement ${methodName} logic\n    try {\n      res.status(501).json({ message: 'Not Implemented' });\n    } catch (error) {\n      next(error);\n    }\n  }\n`;
   let controllerContent = fs.readFileSync(controllerPath, "utf8");
   const lastBraceIndex = controllerContent.lastIndexOf("}");
   controllerContent =
@@ -692,26 +910,43 @@ async function updateResource(resourceName, methodName) {
     newMethod +
     controllerContent.substring(lastBraceIndex);
   fs.writeFileSync(controllerPath, controllerContent);
-  console.log(`✅ Added method '${methodName}' to ${controllerName}.`);
+  console.log(`✅ Added method '${methodName}' to ${controllerName}.`); // Append route to router file
 
-  // Append route to router file
-  const newRoute = `\nrouter.get('/${methodName.toLowerCase()}', ${controllerName}.${methodName});`;
+  const newRoute = `\nrouter.get('/${methodName.toLowerCase()}', authMiddleware, ${controllerName}.${methodName});`;
   fs.appendFileSync(routePath, EOL + newRoute);
   console.log(
     `✅ Added route for '${methodName}' in ${path.basename(routePath)}.`
+  ); // NEW: Update OpenAPI specification for the new method
+
+  await updateOpenAPIForNewMethod(
+    capitalizedName,
+    methodName,
+    "get",
+    projectPath
   );
+
   console.log(
     `\n💡 Action Required: Review the new method in the controller and implement its logic.`
   );
 }
 
+/**
+ * UPDATED: This function now correctly creates plural URLs (e.g., /orders)
+ * when registering a new resource route in app/routes/index.js.
+ */
 function registerRoute(resourceName, routeFileName, projectPath) {
   const mainRouterPath = path.join(projectPath, "app/routes/index.js");
   try {
     let mainRouterContent = fs.readFileSync(mainRouterPath, "utf-8");
-    const hook = "// [Coding express-cli-hook] - Add new routes here";
+    const hook = "// [Coding express-cli-hook] - Add new routes here"; // Pluralize the resource name for the URL path
+
+    const pluralResource = resourceName.endsWith("s")
+      ? resourceName
+      : `${resourceName}s`;
+
     const newRouteImport = `const ${resourceName}Routes = require('./${routeFileName}');`;
-    const newRouteUsage = `router.use('/${resourceName}', ${resourceName}Routes);`;
+    const newRouteUsage = `router.use('/${pluralResource}', ${resourceName}Routes);`;
+
     if (!mainRouterContent.includes(newRouteImport)) {
       mainRouterContent = mainRouterContent.replace(
         hook,
@@ -719,14 +954,17 @@ function registerRoute(resourceName, routeFileName, projectPath) {
       );
       fs.writeFileSync(mainRouterPath, mainRouterContent);
       console.log(
-        `✅ Automatically registered '${resourceName}' routes in app/routes/index.js`
+        `✅ Automatically registered '/${pluralResource}' routes in app/routes/index.js`
       );
     } else {
       console.log(`🟡 Route for '${resourceName}' already registered.`);
     }
   } catch (err) {
+    const pluralForError = resourceName.endsWith("s")
+      ? resourceName
+      : `${resourceName}s`;
     console.error(
-      `\n❌ Error: Could not auto-register routes. Please import and use the new route in 'app/routes/index.js'.\n   Example:\n   const ${resourceName}Routes = require('./${routeFileName}');\n   router.use('/${resourceName}', ${resourceName}Routes);\n`
+      `\n❌ Error: Could not auto-register routes. Please import and use the new route in 'app/routes/index.js'.\n   Example:\n   const ${resourceName}Routes = require('./${routeFileName}');\n   router.use('/${pluralForError}', ${resourceName}Routes);\n`
     );
   }
 }
@@ -769,8 +1007,8 @@ function startDevServer(projectPath) {
     )}' directory.`
   );
   console.log(`To get started, run the following commands:\n`);
-  console.log(`   cd ${path.basename(projectPath)}`);
-  console.log(`   npm run dev`);
+  console.log(`   cd ${path.basename(projectPath)}`);
+  console.log(`   npm run dev`);
   console.log("\n---");
 }
 
@@ -907,6 +1145,8 @@ function getPackageJsonTemplate(appName, orm) {
     inquirer: "^8.2.4",
     "js-yaml": "^4.1.0",
     "swagger-parser": "^10.0.3",
+    "swagger-ui-express": "^5.0.0",
+    yamljs: "^0.3.0",
   };
 
   const devDependencies = {
@@ -948,25 +1188,28 @@ function getServerTemplate(orm) {
     orm === "prisma"
       ? `db.connect();`
       : `db.connect().catch(err => {
-  console.error('❌ Failed to connect to the database on startup.', err);
-  process.exit(1);
+  console.error('❌ Failed to connect to the database on startup.', err);
+  process.exit(1);
 });`;
 
   return `require('dotenv').config();
+const fs = require('fs');
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
 const db = require('./config/database');
 const errorHandler = require('./app/middleware/errorHandler');
+const swaggerUi = require('swagger-ui-express');
+const YAML = require('yamljs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN || '*',
-  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-  credentials: true,
-  optionsSuccessStatus: 204,
+  origin: process.env.CORS_ORIGIN || '*',
+  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+  credentials: true,
+  optionsSuccessStatus: 204,
 };
 app.use(cors(corsOptions));
 
@@ -976,64 +1219,76 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Setup API documentation
+if (process.env.NODE_ENV !== 'production') {
+  const openapiPath = path.join(__dirname, 'openapi.yaml');
+  if (fs.existsSync(openapiPath)) {
+    const swaggerDocument = YAML.load(openapiPath);
+    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+    console.log(\`📚 API documentation available at http://localhost:\${PORT}/api-docs\`);
+  } else {
+    console.log('🟡 openapi.yaml not found, skipping API docs setup.');
+  }
+}
+
 const mainRouter = require('./app/routes/index');
 app.use('/api', mainRouter);
 
 app.use(errorHandler);
 
 app.get('/', (req, res) => {
-  res.send('<h1>Welcome to your Coding express App!</h1>');
+  res.send('<h1>Welcome to your Coding express App!</h1><p>API docs are available at <a href="/api-docs">/api-docs</a></p>');
 });
 
 app.listen(PORT, () => {
-  console.log(\`🚀 Server is running on http://localhost:\${PORT}\`);
+  console.log(\`🚀 Server is running on http://localhost:\${PORT}\`);
 });
 `;
 }
 
 function getErrorHandlerTemplate(orm) {
   let dbErrorHandling = `
-  if (err.name === 'ValidationError') { // Mongoose validation
-    const messages = Object.values(err.errors).map((e) => e.message);
-    return res.status(400).json({ message: 'Validation failed', errors: messages });
-  }
+  if (err.name === 'ValidationError') { // Mongoose validation
+    const messages = Object.values(err.errors).map((e) => e.message);
+    return res.status(400).json({ message: 'Validation failed', errors: messages });
+  }
 
-  if (err.code === 11000) { // Mongoose duplicate key
-    const field = Object.keys(err.keyValue)[0];
-    return res
-      .status(400)
-      .json({ message: \`Duplicate value for \${field}: \${err.keyValue[field]}\` });
-  }`;
+  if (err.code === 11000) { // Mongoose duplicate key
+    const field = Object.keys(err.keyValue)[0];
+    return res
+      .status(400)
+      .json({ message: \`Duplicate value for \${field}: \${err.keyValue[field]}\` });
+  }`;
 
   if (orm === "prisma") {
     dbErrorHandling = `
-  if (err.code === 'P2002') { // Prisma unique constraint violation
-    const field = err.meta?.target?.[0] || 'field';
-    return res.status(400).json({ message: \`A record with this \${field} already exists.\` });
-  }
-  if (err.name === 'PrismaClientValidationError') {
-    return res.status(400).json({ message: 'Invalid data provided.', details: err.message });
-  }`;
+  if (err.code === 'P2002') { // Prisma unique constraint violation
+    const field = err.meta?.target?.[0] || 'field';
+    return res.status(400).json({ message: \`A record with this \${field} already exists.\` });
+  }
+  if (err.name === 'PrismaClientValidationError') {
+    return res.status(400).json({ message: 'Invalid data provided.', details: err.message });
+  }`;
   }
 
   return `const { validationResult } = require('express-validator');
 
 function errorHandler(err, req, res, next) {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
+  }
 ${dbErrorHandling}
-  if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({ message: 'Invalid token' });
-  }
-  if (err.name === 'TokenExpiredError') {
-    return res.status(401).json({ message: 'Token expired', expiredAt: err.expiredAt });
-  }
+  if (err.name === 'JsonWebTokenError') {
+    return res.status(401).json({ message: 'Invalid token' });
+  }
+  if (err.name === 'TokenExpiredError') {
+    return res.status(401).json({ message: 'Token expired', expiredAt: err.expiredAt });
+  }
 
-  console.error('Server error:', err);
-  const status = err.status || 500;
-  res.status(status).json({ message: err.message || 'Internal server error' });
+  console.error('Server error:', err);
+  const status = err.status || 500;
+  res.status(status).json({ message: err.message || 'Internal server error' });
 }
 
 module.exports = errorHandler;
@@ -1047,63 +1302,63 @@ function getDatabaseConfigTemplate(orm) {
 let prisma;
 
 function getPrismaClient() {
-  if (!prisma) {
-    console.log('🔌 Initializing Prisma Client...');
-    prisma = new PrismaClient();
-    console.log('✅ Prisma Client initialized.');
-  }
-  return prisma;
+  if (!prisma) {
+    console.log('🔌 Initializing Prisma Client...');
+    prisma = new PrismaClient();
+    console.log('✅ Prisma Client initialized.');
+  }
+  return prisma;
 }
 
 async function connect() {
-  const client = getPrismaClient();
-  try {
-    await client.$connect();
-    console.log('✅ Database connected via Prisma.');
-  } catch (e) {
-    console.error('❌ Failed to connect to the database using Prisma.', e);
-    await client.$disconnect();
-    process.exit(1);
-  }
+  const client = getPrismaClient();
+  try {
+    await client.$connect();
+    console.log('✅ Database connected via Prisma.');
+  } catch (e) {
+    console.error('❌ Failed to connect to the database using Prisma.', e);
+    await client.$disconnect();
+    process.exit(1);
+  }
 }
 
 module.exports = {
-  connect,
-  prisma: getPrismaClient(),
+  connect,
+  prisma: getPrismaClient(),
 };
 `;
   }
   return `const mongoose = require('mongoose');
 
 const connectionsConfig = {
-  default: {
-    uri: process.env.DB_URI_DEFAULT || 'mongodb://localhost:27017/expresso_db',
-  },
-  // Add other connections here if needed
+  default: {
+    uri: process.env.DB_URI_DEFAULT || 'mongodb://localhost:27017/expresso_db',
+  },
+  // Add other connections here if needed
 };
 
 const activeConnections = {};
 
 async function connect(name = 'default') {
-  if (!connectionsConfig[name]) {
-    throw new Error(\`Database connection "\${name}" is not defined\`);
-  }
-  if (activeConnections[name]) {
-    return activeConnections[name];
-  }
-  console.log(\`🔌 Connecting to database: \${name}...\`);
-  const connection = mongoose.createConnection(connectionsConfig[name].uri);
-  connection.on('connected', () => console.log(\`✅ Database \${name} connected.\`));
-  connection.on('error', (err) => console.error(\`❌ MongoDB error for \${name}:\`, err));
-  activeConnections[name] = connection;
-  return connection;
+  if (!connectionsConfig[name]) {
+    throw new Error(\`Database connection "\${name}" is not defined\`);
+  }
+  if (activeConnections[name]) {
+    return activeConnections[name];
+  }
+  console.log(\`🔌 Connecting to database: \${name}...\`);
+  const connection = mongoose.createConnection(connectionsConfig[name].uri);
+  connection.on('connected', () => console.log(\`✅ Database \${name} connected.\`));
+  connection.on('error', (err) => console.error(\`❌ MongoDB error for \${name}:\`, err));
+  activeConnections[name] = connection;
+  return connection;
 }
 
 async function getConnection(name = 'default') {
-  if (!activeConnections[name]) {
-    return await connect(name);
-  }
-  return activeConnections[name];
+  if (!activeConnections[name]) {
+    return await connect(name);
+  }
+  return activeConnections[name];
 }
 
 module.exports = { connect, getConnection };
@@ -1143,12 +1398,12 @@ function getPrismaSchemaTemplate() {
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql" // Or "mysql", "sqlite", "sqlserver", "mongodb"
-  url      = env("DATABASE_URL")
+  provider = "postgresql" // Or "mysql", "sqlite", "sqlserver", "mongodb"
+  url      = env("DATABASE_URL")
 }
 `;
 }
@@ -1165,25 +1420,25 @@ function getMongooseControllerTemplate(controllerClassName, modelName) {
   return `const getModel = require('../models/${modelName}');
 
 class ${controllerClassName} {
-  async index(req, res, next) {
-    ${getControllerMethodBody("index", modelName, "mongoose")}
-  }
+  async index(req, res, next) {
+    ${getControllerMethodBody("index", modelName, "mongoose")}
+  }
 
-  async store(req, res, next) {
-    ${getControllerMethodBody("store", modelName, "mongoose")}
-  }
+  async store(req, res, next) {
+    ${getControllerMethodBody("store", modelName, "mongoose")}
+  }
 
-  async show(req, res, next) {
-    ${getControllerMethodBody("show", modelName, "mongoose")}
-  }
+  async show(req, res, next) {
+    ${getControllerMethodBody("show", modelName, "mongoose")}
+  }
 
-  async update(req, res, next) {
-    ${getControllerMethodBody("update", modelName, "mongoose")}
-  }
+  async update(req, res, next) {
+    ${getControllerMethodBody("update", modelName, "mongoose")}
+  }
 
-  async destroy(req, res, next) {
-    ${getControllerMethodBody("destroy", modelName, "mongoose")}
-  }
+  async destroy(req, res, next) {
+    ${getControllerMethodBody("destroy", modelName, "mongoose")}
+  }
 }
 
 module.exports = new ${controllerClassName}();
@@ -1196,25 +1451,25 @@ function getPrismaControllerTemplate(controllerClassName, modelName) {
   return `const { prisma } = require('../../config/database');
 
 class ${controllerClassName} {
-  async index(req, res, next) {
-    ${getControllerMethodBody("index", modelName, "prisma")}
-  }
+  async index(req, res, next) {
+    ${getControllerMethodBody("index", modelName, "prisma")}
+  }
 
-  async store(req, res, next) {
-    ${getControllerMethodBody("store", modelName, "prisma")}
-  }
+  async store(req, res, next) {
+    ${getControllerMethodBody("store", modelName, "prisma")}
+  }
 
-  async show(req, res, next) {
-    ${getControllerMethodBody("show", modelName, "prisma")}
-  }
+  async show(req, res, next) {
+    ${getControllerMethodBody("show", modelName, "prisma")}
+  }
 
-  async update(req, res, next) {
-    ${getControllerMethodBody("update", modelName, "prisma")}
-  }
+  async update(req, res, next) {
+    ${getControllerMethodBody("update", modelName, "prisma")}
+  }
 
-  async destroy(req, res, next) {
-    ${getControllerMethodBody("destroy", modelName, "prisma")}
-  }
+  async destroy(req, res, next) {
+    ${getControllerMethodBody("destroy", modelName, "prisma")}
+  }
 }
 
 module.exports = new ${controllerClassName}();
@@ -1225,53 +1480,53 @@ function getMongooseModelTemplate(
   name,
   conn,
   fields = `{
-    name: { type: String, required: true, trim: true },
-    // Add more fields here
-  }`
+    name: { type: String, required: true, trim: true },
+    // Add more fields here
+  }`
 ) {
   return `const mongoose = require('mongoose');
 const { Schema } = mongoose;
 const { getConnection } = require('../../config/database');
 
 const ${name.toLowerCase()}Schema = new Schema(
-  ${fields},
-  { timestamps: true }
+  ${fields},
+  { timestamps: true }
 );
 
 module.exports = async () => {
-  const conn = await getConnection('${conn}');
-  return conn.model('${name}', ${name.toLowerCase()}Schema);
+  const conn = await getConnection('${conn}');
+  return conn.model('${name}', ${name.toLowerCase()}Schema);
 };
 `;
 }
 
 function getPrismaModelTemplate(name) {
   return `model ${name} {
-  id        Int      @id @default(autoincrement())
-  name      String
-  // Add other fields here, e.g.,
-  // description String?
-  // price       Float    @default(0)
+  id        Int      @id @default(autoincrement())
+  name      String
+  // Add other fields here, e.g.,
+  // description String?
+  // price       Float    @default(0)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }`;
 }
 
 function getPrismaUserModelTemplate() {
   return `
 model User {
-  id                  Int       @id @default(autoincrement())
-  email               String?   @unique
-  phone               String?   @unique
-  password            String?
-  otp                 String?
-  otpExpires          DateTime?
-  refreshToken        String?
-  refreshTokenExpires DateTime?
+  id                  Int       @id @default(autoincrement())
+  email               String?   @unique
+  phone               String?   @unique
+  password            String?
+  otp                 String?
+  otpExpires          DateTime?
+  refreshToken        String?
+  refreshTokenExpires DateTime?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }`;
 }
 
@@ -1297,18 +1552,18 @@ function getValidatorTemplate(modelName) {
   return `const { body } = require('express-validator');
 
 const ${modelName.toLowerCase()}Validator = {
-  store: [
-    body('name')
-      .notEmpty().withMessage('Name is required')
-      .isString().withMessage('Name must be a string')
-      .trim(),
-  ],
-  update: [
-    body('name')
-      .optional()
-      .isString().withMessage('Name must be a string')
-      .trim(),
-  ],
+  store: [
+    body('name')
+      .notEmpty().withMessage('Name is required')
+      .isString().withMessage('Name must be a string')
+      .trim(),
+  ],
+  update: [
+    body('name')
+      .optional()
+      .isString().withMessage('Name must be a string')
+      .trim(),
+  ],
 };
 
 module.exports = ${modelName.toLowerCase()}Validator;
@@ -1351,7 +1606,7 @@ const router = express.Router();
 const authRoutes = require('./authRoutes');
 
 router.get('/', (req, res) => {
-  res.json({ message: 'Welcome to the Coding express API root!' });
+  res.json({ message: 'Welcome to the Coding express API root!' });
 });
 
 router.use('/auth', authRoutes);
@@ -1369,46 +1624,46 @@ const bcrypt = require('bcryptjs');
 const { getConnection } = require('../../config/database');
 
 const UserSchema = new Schema({
-  email: { type: String, unique: true, lowercase: true, trim: true, sparse: true },
-  phone: { type: String, unique: true, trim: true, sparse: true },
-  password: { type: String, minlength: 6 },
-  otp: { type: String },
-  otpExpires: { type: Date },
-  refreshToken: { type: String },
-  refreshTokenExpires: { type: Date },
+  email: { type: String, unique: true, lowercase: true, trim: true, sparse: true },
+  phone: { type: String, unique: true, trim: true, sparse: true },
+  password: { type: String, minlength: 6 },
+  otp: { type: String },
+  otpExpires: { type: Date },
+  refreshToken: { type: String },
+  refreshTokenExpires: { type: Date },
 }, { timestamps: true });
 
 UserSchema.pre('save', async function (next) {
-  if (this.isModified('password') && this.password) {
-    this.password = await bcrypt.hash(this.password, 10);
-  }
-    if (this.isModified('otp') && this.otp && this.otp.length < 10) {
-    this.otp = await bcrypt.hash(this.otp, 10);
-  }
-  if (this.isModified('refreshToken') && this.refreshToken && this.refreshToken.length < 100) {
-    this.refreshToken = await bcrypt.hash(this.refreshToken, 10);
-  }
-  next();
+  if (this.isModified('password') && this.password) {
+    this.password = await bcrypt.hash(this.password, 10);
+  }
+    if (this.isModified('otp') && this.otp && this.otp.length < 10) {
+    this.otp = await bcrypt.hash(this.otp, 10);
+  }
+  if (this.isModified('refreshToken') && this.refreshToken && this.refreshToken.length < 100) {
+    this.refreshToken = await bcrypt.hash(this.refreshToken, 10);
+  }
+  next();
 });
 
 UserSchema.methods.comparePassword = function (candidatePassword) {
-  return this.password ? bcrypt.compare(candidatePassword, this.password) : false;
+  return this.password ? bcrypt.compare(candidatePassword, this.password) : false;
 };
 
 UserSchema.methods.compareOtp = function (candidateOtp) {
-  if (!this.otp || !this.otpExpires || this.otpExpires < Date.now()) return false;
-  return bcrypt.compare(candidateOtp, this.otp);
+  if (!this.otp || !this.otpExpires || this.otpExpires < Date.now()) return false;
+  return bcrypt.compare(candidateOtp, this.otp);
 };
 
 UserSchema.methods.compareRefreshToken = function (candidateRefreshToken) {
-  if (!this.refreshToken) return false;
-  return bcrypt.compare(candidateRefreshToken, this.refreshToken);
+  if (!this.refreshToken) return false;
+  return bcrypt.compare(candidateRefreshToken, this.refreshToken);
 };
 
 
 module.exports = async () => {
-  const conn = await getConnection('default');
-  return conn.model('User', UserSchema);
+  const conn = await getConnection('default');
+  return conn.model('User', UserSchema);
 };
 `;
 }
@@ -1423,311 +1678,311 @@ function getAuthControllerTemplate(orm) {
 
 function getMongooseAuthControllerTemplate() {
   return `
-  const getUserModel = require('../models/User');
+  const getUserModel = require('../models/User');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const twilio = require('twilio');
 const bcrypt = require('bcryptjs');
 
 const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_SERVICE_HOST || 'smtp.example.com',
-  port: parseInt(process.env.EMAIL_SERVICE_PORT || '587'),
-  secure: process.env.EMAIL_SERVICE_PORT === '465',
-  auth: {
-    user: process.env.EMAIL_SERVICE_USER || 'user@example.com',
-    pass: process.env.EMAIL_SERVICE_PASS || 'password',
-  },
+  host: process.env.EMAIL_SERVICE_HOST || 'smtp.example.com',
+  port: parseInt(process.env.EMAIL_SERVICE_PORT || '587'),
+  secure: process.env.EMAIL_SERVICE_PORT === '465',
+  auth: {
+    user: process.env.EMAIL_SERVICE_USER || 'user@example.com',
+    pass: process.env.EMAIL_SERVICE_PASS || 'password',
+  },
 });
 
 const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID || 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-  process.env.TWILIO_AUTH_TOKEN || 'your_auth_token_here'
+  process.env.TWILIO_ACCOUNT_SID || 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+  process.env.TWILIO_AUTH_TOKEN || 'your_auth_token_here'
 );
 
 const generateOtp = () => {
-  const otpLength = parseInt(process.env.OTP_LENGTH || '6');
-  const digits = '0123456789';
-  let otp = '';
-  for (let i = 0; i < otpLength; i++) {
-    otp += digits[Math.floor(Math.random() * 10)];
-  }
-  return otp;
+  const otpLength = parseInt(process.env.OTP_LENGTH || '6');
+  const digits = '0123456789';
+  let otp = '';
+  for (let i = 0; i < otpLength; i++) {
+    otp += digits[Math.floor(Math.random() * 10)];
+  }
+  return otp;
 };
 
 const sendOtpMessage = async (type, recipient, otp) => {
-  if (type === 'email') {
-    try {
-      await transporter.sendMail({
-        from: process.env.FROM_EMAIL || 'no-reply@codingexpress.com',
-        to: recipient,
-        subject: 'Your Coding express App OTP',
-        text: \`Your OTP for Coding express App is: \${otp}. It is valid for \${ process.env.OTP_EXPIRY_MINUTES || "10 minutes" }.\`,
-        html: \`<p>Your OTP for Coding express App is: <strong>\${otp}</strong>. It is valid for \${process.env.OTP_EXPIRY_MINUTES || "10 minutes"}.</p>\`,
-      });
-      console.log(\`Email OTP sent to \${recipient}\`);
-    } catch (error) {
-      console.error('Error sending email OTP:', error);
-      throw new Error('Failed to send email OTP.');
-    }
-  } else if (type === 'phone') {
-    try {
-        if(process.env.TWILIO_ACCOUNT_SID !== 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx') {
-            await twilioClient.messages.create({
-                body: \`Your OTP for Coding express App is: \${otp}\`,
-                from: process.env.TWILIO_PHONE_NUMBER,
-                to: recipient
-            });
-        }
-      console.log(\`SMS OTP sent to \${recipient}\`);
-    } catch (error) {
-      console.error('Error sending SMS OTP:', error);
-      throw new Error('Failed to send SMS OTP.');
-    }
-  }
+  if (type === 'email') {
+    try {
+      await transporter.sendMail({
+        from: process.env.FROM_EMAIL || 'no-reply@codingexpress.com',
+        to: recipient,
+        subject: 'Your Coding express App OTP',
+        text: \`Your OTP for Coding express App is: \${otp}. It is valid for \${ process.env.OTP_EXPIRY_MINUTES || "10 minutes" }.\`,
+        html: \`<p>Your OTP for Coding express App is: <strong>\${otp}</strong>. It is valid for \${process.env.OTP_EXPIRY_MINUTES || "10 minutes"}.</p>\`,
+      });
+      console.log(\`Email OTP sent to \${recipient}\`);
+    } catch (error) {
+      console.error('Error sending email OTP:', error);
+      throw new Error('Failed to send email OTP.');
+    }
+  } else if (type === 'phone') {
+    try {
+        if(process.env.TWILIO_ACCOUNT_SID !== 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx') {
+            await twilioClient.messages.create({
+                body: \`Your OTP for Coding express App is: \${otp}\`,
+                from: process.env.TWILIO_PHONE_NUMBER,
+                to: recipient
+            });
+        }
+      console.log(\`SMS OTP sent to \${recipient}\`);
+    } catch (error) {
+      console.error('Error sending SMS OTP:', error);
+      throw new Error('Failed to send SMS OTP.');
+    }
+  }
 };
 
 class AuthController {
-  async sendOtp(req, res, next) {
-    try {
-      const { email, phone } = req.body;
-      const User = await getUserModel();
-      let user;
-      const otp = generateOtp();
+  async sendOtp(req, res, next) {
+    try {
+      const { email, phone } = req.body;
+      const User = await getUserModel();
+      let user;
+      const otp = generateOtp();
 
-      const otpExpires = new Date(
-        Date.now() +
-          parseInt(process.env.OTP_EXPIRY_MINUTES || '10') * 60 * 1000
-      );
+      const otpExpires = new Date(
+        Date.now() +
+          parseInt(process.env.OTP_EXPIRY_MINUTES || '10') * 60 * 1000
+      );
 
-      if (email) {
-        user = await User.findOne({ email });
-        if (!user) {
-          user = new User({ email });
-        }
-      } else if (phone) {
-        user = await User.findOne({ phone });
-        if (!user) {
-          user = new User({ phone });
-        }
-      } else {
-          return res.status(400).json({ message: 'Email or phone number is required.' });
-      }
+      if (email) {
+        user = await User.findOne({ email });
+        if (!user) {
+          user = new User({ email });
+        }
+      } else if (phone) {
+        user = await User.findOne({ phone });
+        if (!user) {
+          user = new User({ phone });
+        }
+      } else {
+          return res.status(400).json({ message: 'Email or phone number is required.' });
+      }
 
-      user.otp = otp;
-      user.otpExpires = otpExpires;
-      await user.save();
-      await sendOtpMessage(email ? 'email' : 'phone', email || phone, otp);
-      return res.json({ message: \`OTP sent to your \${email ? 'email' : 'phone'}.\` });
-    } catch (error) {
-      next(error);
-    }
-  }
+      user.otp = otp;
+      user.otpExpires = otpExpires;
+      await user.save();
+      await sendOtpMessage(email ? 'email' : 'phone', email || phone, otp);
+      return res.json({ message: \`OTP sent to your \${email ? 'email' : 'phone'}.\` });
+    } catch (error) {
+      next(error);
+    }
+  }
 
-  async register(req, res, next) {
-    try {
-      const { email, phone, password } = req.body;
-      const User = await getUserModel();
+  async register(req, res, next) {
+    try {
+      const { email, phone, password } = req.body;
+      const User = await getUserModel();
 
-      const query = email ? { email } : { phone };
-      if(!email && !phone) return res.status(400).json({message: 'Email or phone is required'});
-      
-      const existingUser = await User.findOne(query);
+      const query = email ? { email } : { phone };
+      if(!email && !phone) return res.status(400).json({message: 'Email or phone is required'});
+      
+      const existingUser = await User.findOne(query);
 
-      if (existingUser) {
-        return res.status(400).json({
-          message: 'User with this email or phone number already exists.',
-        });
-      }
+      if (existingUser) {
+        return res.status(400).json({
+          message: 'User with this email or phone number already exists.',
+        });
+      }
 
-      const newUser = new User({ email, phone, password });
-      await newUser.save();
+      const newUser = new User({ email, phone, password });
+      await newUser.save();
 
-      res.status(201).json({ message: 'User registered successfully!' });
-    } catch (error) {
-      next(error);
-    }
-  }
+      res.status(201).json({ message: 'User registered successfully!' });
+    } catch (error) {
+      next(error);
+    }
+  }
 
-  async login(req, res, next) {
-    try {
-      const { email, phone, password, otp } = req.body;
-      const User = await getUserModel();
-      let user;
+  async login(req, res, next) {
+    try {
+      const { email, phone, password, otp } = req.body;
+      const User = await getUserModel();
+      let user;
 
-      if (email) {
-        user = await User.findOne({ email });
-      } else if (phone) {
-        user = await User.findOne({ phone });
-      }
+      if (email) {
+        user = await User.findOne({ email });
+      } else if (phone) {
+        user = await User.findOne({ phone });
+      }
 
-      if (!user) {
-        return res
-          .status(401)
-          .json({ message: 'Invalid credentials or user not found.' });
-      }
+      if (!user) {
+        return res
+          .status(401)
+          .json({ message: 'Invalid credentials or user not found.' });
+      }
 
-      if (password) {
-        if (!(await user.comparePassword(password))) {
-          return res.status(401).json({ message: 'Invalid password.' });
-        }
-      } else if (otp) {
-        if (!(await user.compareOtp(otp))) {
-          return res.status(401).json({ message: 'Invalid or expired OTP.' });
-        }
-        user.otp = undefined;
-        user.otpExpires = undefined;
-      } else {
-        return res.status(400).json({ message: 'Password or OTP is required.' });
-      }
+      if (password) {
+        if (!(await user.comparePassword(password))) {
+          return res.status(401).json({ message: 'Invalid password.' });
+        }
+      } else if (otp) {
+        if (!(await user.compareOtp(otp))) {
+          return res.status(401).json({ message: 'Invalid or expired OTP.' });
+        }
+        user.otp = undefined;
+        user.otpExpires = undefined;
+      } else {
+        return res.status(400).json({ message: 'Password or OTP is required.' });
+      }
 
-      const accessToken = jwt.sign(
-        { id: user._id, email: user.email, phone: user.phone },
-        process.env.JWT_SECRET,
-        { expiresIn: '1h' }
-      );
+      const accessToken = jwt.sign(
+        { id: user._id, email: user.email, phone: user.phone },
+        process.env.JWT_SECRET,
+        { expiresIn: '1h' }
+      );
 
-      const refreshToken = jwt.sign(
-        { id: user._id },
-        process.env.JWT_REFRESH_SECRET,
-        { expiresIn: \`\${process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7}d\` }
-      );
+      const refreshToken = jwt.sign(
+        { id: user._id },
+        process.env.JWT_REFRESH_SECRET,
+        { expiresIn: \`\${process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7}d\` }
+      );
 
-      user.refreshToken = refreshToken;
-      await user.save();
+      user.refreshToken = refreshToken;
+      await user.save();
 
-      res.json({
-        message: 'Login successful!',
-        accessToken,
-        refreshToken,
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
+      res.json({
+        message: 'Login successful!',
+        accessToken,
+        refreshToken,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 
-  async refreshToken(req, res, next) {
-    try {
-      const { refreshToken } = req.body;
-      if(!refreshToken) return res.status(400).json({message: 'Refresh token is required'});
-      
-      const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-      const User = await getUserModel();
-      const user = await User.findById(decoded.id);
+  async refreshToken(req, res, next) {
+    try {
+      const { refreshToken } = req.body;
+      if(!refreshToken) return res.status(400).json({message: 'Refresh token is required'});
+      
+      const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+      const User = await getUserModel();
+      const user = await User.findById(decoded.id);
 
-      if (!user || !(await user.compareRefreshToken(refreshToken))) {
-        return res
-          .status(401)
-          .json({ message: 'Invalid refresh token. Please log in again.' });
-      }
-      
-      if (user.refreshTokenExpires && user.refreshTokenExpires < Date.now()) {
-        return res
-          .status(401)
-          .json({ message: 'Refresh token expired. Please log in again.' });
-      }
+      if (!user || !(await user.compareRefreshToken(refreshToken))) {
+        return res
+          .status(401)
+          .json({ message: 'Invalid refresh token. Please log in again.' });
+      }
+      
+      if (user.refreshTokenExpires && user.refreshTokenExpires < Date.now()) {
+        return res
+          .status(401)
+          .json({ message: 'Refresh token expired. Please log in again.' });
+      }
 
-      const newAccessToken = jwt.sign(
-        { id: user._id, email: user.email, phone: user.phone },
-        process.env.JWT_SECRET,
-        { expiresIn: '1h' }
-      );
+      const newAccessToken = jwt.sign(
+        { id: user._id, email: user.email, phone: user.phone },
+        process.env.JWT_SECRET,
+        { expiresIn: '1h' }
+      );
 
-      const newRefreshToken = jwt.sign(
-        { id: user._id },
-        process.env.JWT_REFRESH_SECRET,
-        { expiresIn: \`\${process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7}d\` }
-      );
-      
-      user.refreshToken = newRefreshToken;
-      user.refreshTokenExpires = new Date(Date.now() + parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7) * 24 * 60 * 60 * 1000);
-      await user.save();
+      const newRefreshToken = jwt.sign(
+        { id: user._id },
+        process.env.JWT_REFRESH_SECRET,
+        { expiresIn: \`\${process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7}d\` }
+      );
+      
+      user.refreshToken = newRefreshToken;
+      user.refreshTokenExpires = new Date(Date.now() + parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7) * 24 * 60 * 60 * 1000);
+      await user.save();
 
-      res.json({
-        message: 'Tokens refreshed successfully!',
-        accessToken: newAccessToken,
-        refreshToken: newRefreshToken,
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
+      res.json({
+        message: 'Tokens refreshed successfully!',
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 
-  async forgotPassword(req, res, next) {
-    try {
-      const { email, phone } = req.body;
-      const User = await getUserModel();
-      let user;
+  async forgotPassword(req, res, next) {
+    try {
+      const { email, phone } = req.body;
+      const User = await getUserModel();
+      let user;
 
-      if (email) {
-        user = await User.findOne({ email });
-        if (!user) return res.status(404).json({ message: 'User not found with this email.' });
-      } else if (phone) {
-        user = await User.findOne({ phone });
-        if (!user) return res.status(404).json({ message: 'User not found with this phone number.' });
-      } else {
-        return res.status(400).json({ message: 'Email or phone number is required.' });
-      }
+      if (email) {
+        user = await User.findOne({ email });
+        if (!user) return res.status(404).json({ message: 'User not found with this email.' });
+      } else if (phone) {
+        user = await User.findOne({ phone });
+        if (!user) return res.status(404).json({ message: 'User not found with this phone number.' });
+      } else {
+        return res.status(400).json({ message: 'Email or phone number is required.' });
+      }
 
-      const otp = generateOtp();
-      user.otp = otp;
-      user.otpExpires = new Date(Date.now() + parseInt(process.env.OTP_EXPIRY_MINUTES || '10') * 60000);
-      await user.save();
-      
-      await sendOtpMessage(email ? 'email' : 'phone', email || phone, otp);
+      const otp = generateOtp();
+      user.otp = otp;
+      user.otpExpires = new Date(Date.now() + parseInt(process.env.OTP_EXPIRY_MINUTES || '10') * 60000);
+      await user.save();
+      
+      await sendOtpMessage(email ? 'email' : 'phone', email || phone, otp);
 
-      res.json({
-        message: 'OTP sent for password reset. Please use it to reset your password.',
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
+      res.json({
+        message: 'OTP sent for password reset. Please use it to reset your password.',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 
-  async resetPassword(req, res, next) {
-    try {
-      const { email, phone, otp, newPassword } = req.body;
-      const User = await getUserModel();
-      let user;
+  async resetPassword(req, res, next) {
+    try {
+      const { email, phone, otp, newPassword } = req.body;
+      const User = await getUserModel();
+      let user;
 
-      if (email) {
-        user = await User.findOne({ email });
-      } else if (phone) {
-        user = await User.findOne({ phone });
-      }
+      if (email) {
+        user = await User.findOne({ email });
+      } else if (phone) {
+        user = await User.findOne({ phone });
+      }
 
-      if (!user) {
-        return res.status(404).json({ message: 'User not found.' });
-      }
+      if (!user) {
+        return res.status(404).json({ message: 'User not found.' });
+      }
 
-      if (!(await user.compareOtp(otp))) {
-        return res.status(401).json({ message: 'Invalid or expired OTP.' });
-      }
+      if (!(await user.compareOtp(otp))) {
+        return res.status(401).json({ message: 'Invalid or expired OTP.' });
+      }
 
-      user.password = newPassword;
-      user.otp = undefined;
-      user.otpExpires = undefined;
-      await user.save();
+      user.password = newPassword;
+      user.otp = undefined;
+      user.otpExpires = undefined;
+      await user.save();
 
-      res.json({ message: 'Password has been reset successfully.' });
-    } catch (error) {
-      next(error);
-    }
-  }
+      res.json({ message: 'Password has been reset successfully.' });
+    } catch (error) {
+      next(error);
+    }
+  }
 
-  async getProfile(req, res, next) {
-    try {
-      const User = await getUserModel();
-      const user = await User.findById(req.user.id).select(
-        '-password -otp -otpExpires -refreshToken -refreshTokenExpires'
-      );
-      if (!user) {
-        return res.status(404).json({ message: 'User profile not found.' });
-      }
-      res.json({ message: 'Profile data', user });
-    } catch (error) {
-      next(error);
-    }
-  }
+  async getProfile(req, res, next) {
+    try {
+      const User = await getUserModel();
+      const user = await User.findById(req.user.id).select(
+        '-password -otp -otpExpires -refreshToken -refreshTokenExpires'
+      );
+      if (!user) {
+        return res.status(404).json({ message: 'User profile not found.' });
+      }
+      res.json({ message: 'Profile data', user });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new AuthController();
@@ -1742,252 +1997,252 @@ const twilio = require('twilio');
 const bcrypt = require('bcryptjs');
 
 const transporter = nodemailer.createTransport({
-    host: process.env.EMAIL_SERVICE_HOST || 'smtp.example.com',
-    port: parseInt(process.env.EMAIL_SERVICE_PORT || '587'),
-    secure: process.env.EMAIL_SERVICE_PORT === '465',
-    auth: {
-        user: process.env.EMAIL_SERVICE_USER || 'user@example.com',
-        pass: process.env.EMAIL_SERVICE_PASS || 'password',
-    },
+    host: process.env.EMAIL_SERVICE_HOST || 'smtp.example.com',
+    port: parseInt(process.env.EMAIL_SERVICE_PORT || '587'),
+    secure: process.env.EMAIL_SERVICE_PORT === '465',
+    auth: {
+        user: process.env.EMAIL_SERVICE_USER || 'user@example.com',
+        pass: process.env.EMAIL_SERVICE_PASS || 'password',
+    },
 });
 
 const twilioClient = twilio(
-    process.env.TWILIO_ACCOUNT_SID || 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-    process.env.TWILIO_AUTH_TOKEN || 'your_auth_token_here'
+    process.env.TWILIO_ACCOUNT_SID || 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+    process.env.TWILIO_AUTH_TOKEN || 'your_auth_token_here'
 );
 
 const generateOtp = () => {
-    const otpLength = parseInt(process.env.OTP_LENGTH || '6');
-    return Math.floor(Math.pow(10, otpLength - 1) + Math.random() * 9 * Math.pow(10, otpLength - 1)).toString();
+    const otpLength = parseInt(process.env.OTP_LENGTH || '6');
+    return Math.floor(Math.pow(10, otpLength - 1) + Math.random() * 9 * Math.pow(10, otpLength - 1)).toString();
 };
 
 const sendOtpMessage = async (type, recipient, otp) => {
-  if (type === 'email') {
-    try {
-      await transporter.sendMail({
-        from: process.env.FROM_EMAIL || 'no-reply@codingexpress.com',
-        to: recipient,
-        subject: 'Your Coding express App OTP',
-        text: \`Your OTP for Coding express App is: \${otp}. It is valid for \${ process.env.OTP_EXPIRY_MINUTES || "10 minutes" }.\`,
-        html: \`<p>Your OTP for Coding express App is: <strong>\${otp}</strong>. It is valid for \${process.env.OTP_EXPIRY_MINUTES || "10 minutes"}.</p>\`,
-      });
-      console.log(\`Email OTP sent to \${recipient}\`);
-    } catch (error) {
-      console.error('Error sending email OTP:', error);
-      throw new Error('Failed to send email OTP.');
-    }
-  } else if (type === 'phone') {
-    try {
-        if(process.env.TWILIO_ACCOUNT_SID !== 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx') {
-            await twilioClient.messages.create({
-                body: \`Your OTP for Coding express App is: \${otp}\`,
-                from: process.env.TWILIO_PHONE_NUMBER,
-                to: recipient
-            });
-        }
-      console.log(\`SMS OTP sent to \${recipient}\`);
-    } catch (error) {
-      console.error('Error sending SMS OTP:', error);
-      throw new Error('Failed to send SMS OTP.');
-    }
-  }
+  if (type === 'email') {
+    try {
+      await transporter.sendMail({
+        from: process.env.FROM_EMAIL || 'no-reply@codingexpress.com',
+        to: recipient,
+        subject: 'Your Coding express App OTP',
+        text: \`Your OTP for Coding express App is: \${otp}. It is valid for \${ process.env.OTP_EXPIRY_MINUTES || "10 minutes" }.\`,
+        html: \`<p>Your OTP for Coding express App is: <strong>\${otp}</strong>. It is valid for \${process.env.OTP_EXPIRY_MINUTES || "10 minutes"}.</p>\`,
+      });
+      console.log(\`Email OTP sent to \${recipient}\`);
+    } catch (error) {
+      console.error('Error sending email OTP:', error);
+      throw new Error('Failed to send email OTP.');
+    }
+  } else if (type === 'phone') {
+    try {
+        if(process.env.TWILIO_ACCOUNT_SID !== 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxx') {
+            await twilioClient.messages.create({
+                body: \`Your OTP for Coding express App is: \${otp}\`,
+                from: process.env.TWILIO_PHONE_NUMBER,
+                to: recipient
+            });
+        }
+      console.log(\`SMS OTP sent to \${recipient}\`);
+    } catch (error) {
+      console.error('Error sending SMS OTP:', error);
+      throw new Error('Failed to send SMS OTP.');
+    }
+  }
 };
 
 class AuthController {
-    async sendOtp(req, res, next) {
-        try {
-            const { email, phone } = req.body;
-            const otp = generateOtp();
-            const hashedOtp = await bcrypt.hash(otp, 10);
-            const otpExpires = new Date(Date.now() + parseInt(process.env.OTP_EXPIRY_MINUTES || '10') * 60000);
-            
-            let whereClause = email ? { email } : { phone };
-            if(!email && !phone) return res.status(400).json({ message: 'Email or phone number is required.'});
+    async sendOtp(req, res, next) {
+        try {
+            const { email, phone } = req.body;
+            const otp = generateOtp();
+            const hashedOtp = await bcrypt.hash(otp, 10);
+            const otpExpires = new Date(Date.now() + parseInt(process.env.OTP_EXPIRY_MINUTES || '10') * 60000);
+            
+            let whereClause = email ? { email } : { phone };
+            if(!email && !phone) return res.status(400).json({ message: 'Email or phone number is required.'});
 
-            await prisma.user.upsert({
-                where: whereClause,
-                update: { otp: hashedOtp, otpExpires },
-                create: { ...whereClause, otp: hashedOtp, otpExpires }
-            });
-            
-            await sendOtpMessage(email ? 'email' : 'phone', email || phone, otp);
-            res.json({ message: \`OTP sent to your \${email ? 'email' : 'phone'}.\` });
-        } catch (error) {
-            next(error);
-        }
-    }
+            await prisma.user.upsert({
+                where: whereClause,
+                update: { otp: hashedOtp, otpExpires },
+                create: { ...whereClause, otp: hashedOtp, otpExpires }
+            });
+            
+            await sendOtpMessage(email ? 'email' : 'phone', email || phone, otp);
+            res.json({ message: \`OTP sent to your \${email ? 'email' : 'phone'}.\` });
+        } catch (error) {
+            next(error);
+        }
+    }
 
-    async register(req, res, next) {
-        try {
-            const { email, phone, password } = req.body;
-            if(!password) return res.status(400).json({message: 'Password is required'});
-            
-            const hashedPassword = await bcrypt.hash(password, 10);
-            
-            const createData = {
-                password: hashedPassword,
-                ...(email && { email }),
-                ...(phone && { phone }),
-            };
-            if(!email && !phone) return res.status(400).json({message: 'Email or phone is required'});
+    async register(req, res, next) {
+        try {
+            const { email, phone, password } = req.body;
+            if(!password) return res.status(400).json({message: 'Password is required'});
+            
+            const hashedPassword = await bcrypt.hash(password, 10);
+            
+            const createData = {
+                password: hashedPassword,
+                ...(email && { email }),
+                ...(phone && { phone }),
+            };
+            if(!email && !phone) return res.status(400).json({message: 'Email or phone is required'});
 
-            await prisma.user.create({ data: createData });
-            res.status(201).json({ message: 'User registered successfully!' });
-        } catch (error) {
-            next(error);
-        }
-    }
+            await prisma.user.create({ data: createData });
+            res.status(201).json({ message: 'User registered successfully!' });
+        } catch (error) {
+            next(error);
+        }
+    }
 
-    async login(req, res, next) {
-        try {
-            const { email, phone, password, otp } = req.body;
-            let whereClause = email ? { email } : { phone };
-            const user = await prisma.user.findUnique({ where: whereClause });
+    async login(req, res, next) {
+        try {
+            const { email, phone, password, otp } = req.body;
+            let whereClause = email ? { email } : { phone };
+            const user = await prisma.user.findUnique({ where: whereClause });
 
-            if (!user) {
-                return res.status(401).json({ message: 'Invalid credentials or user not found.' });
-            }
+            if (!user) {
+                return res.status(401).json({ message: 'Invalid credentials or user not found.' });
+            }
 
-            if (password) {
-                if (!user.password || !(await bcrypt.compare(password, user.password))) {
-                    return res.status(401).json({ message: 'Invalid password.' });
-                }
-            } else if (otp) {
-                if (!user.otp || !user.otpExpires || user.otpExpires < new Date() || !(await bcrypt.compare(otp, user.otp))) {
-                    return res.status(401).json({ message: 'Invalid or expired OTP.' });
-                }
-                await prisma.user.update({ where: whereClause, data: { otp: null, otpExpires: null } });
-            } else {
-                 return res.status(400).json({ message: 'Password or OTP is required.' });
-            }
+            if (password) {
+                if (!user.password || !(await bcrypt.compare(password, user.password))) {
+                    return res.status(401).json({ message: 'Invalid password.' });
+                }
+            } else if (otp) {
+                if (!user.otp || !user.otpExpires || user.otpExpires < new Date() || !(await bcrypt.compare(otp, user.otp))) {
+                    return res.status(401).json({ message: 'Invalid or expired OTP.' });
+                }
+                await prisma.user.update({ where: whereClause, data: { otp: null, otpExpires: null } });
+            } else {
+                 return res.status(400).json({ message: 'Password or OTP is required.' });
+            }
 
-            const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-            const refreshTokenValue = jwt.sign({ id: user.id }, process.env.JWT_REFRESH_SECRET, { expiresIn: \`\${process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7}d\` });
-            const hashedRefreshToken = await bcrypt.hash(refreshTokenValue, 10);
-            const refreshTokenExpires = new Date(Date.now() + parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7) * 24 * 60 * 60 * 1000);
+            const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+            const refreshTokenValue = jwt.sign({ id: user.id }, process.env.JWT_REFRESH_SECRET, { expiresIn: \`\${process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7}d\` });
+            const hashedRefreshToken = await bcrypt.hash(refreshTokenValue, 10);
+            const refreshTokenExpires = new Date(Date.now() + parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7) * 24 * 60 * 60 * 1000);
 
 
-            await prisma.user.update({
-                where: whereClause,
-                data: { refreshToken: hashedRefreshToken, refreshTokenExpires }
-            });
+            await prisma.user.update({
+                where: whereClause,
+                data: { refreshToken: hashedRefreshToken, refreshTokenExpires }
+            });
 
-            res.json({ message: 'Login successful!', accessToken, refreshToken: refreshTokenValue });
-        } catch (error) {
-            next(error);
-        }
-    }
+            res.json({ message: 'Login successful!', accessToken, refreshToken: refreshTokenValue });
+        } catch (error) {
+            next(error);
+        }
+    }
 
-    async refreshToken(req, res, next) {
-        try {
-            const { refreshToken } = req.body;
-            if(!refreshToken) return res.status(400).json({message: 'Refresh token is required'});
+    async refreshToken(req, res, next) {
+        try {
+            const { refreshToken } = req.body;
+            if(!refreshToken) return res.status(400).json({message: 'Refresh token is required'});
 
-            const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-            const user = await prisma.user.findUnique({ where: { id: decoded.id } });
+            const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+            const user = await prisma.user.findUnique({ where: { id: decoded.id } });
 
-            if (!user || !user.refreshToken || !(await bcrypt.compare(refreshToken, user.refreshToken))) {
-                return res.status(401).json({ message: 'Invalid refresh token. Please log in again.' });
-            }
+            if (!user || !user.refreshToken || !(await bcrypt.compare(refreshToken, user.refreshToken))) {
+                return res.status(401).json({ message: 'Invalid refresh token. Please log in again.' });
+            }
 
-            if (user.refreshTokenExpires && user.refreshTokenExpires < new Date()) {
-                return res.status(401).json({ message: 'Refresh token expired. Please log in again.' });
-            }
+            if (user.refreshTokenExpires && user.refreshTokenExpires < new Date()) {
+                return res.status(401).json({ message: 'Refresh token expired. Please log in again.' });
+            }
 
-            const newAccessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-            const newRefreshTokenValue = jwt.sign({ id: user.id }, process.env.JWT_REFRESH_SECRET, { expiresIn: \`\${process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7}d\` });
-            const newHashedRefreshToken = await bcrypt.hash(newRefreshTokenValue, 10);
-            const newRefreshTokenExpires = new Date(Date.now() + parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7) * 24 * 60 * 60 * 1000);
+            const newAccessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+            const newRefreshTokenValue = jwt.sign({ id: user.id }, process.env.JWT_REFRESH_SECRET, { expiresIn: \`\${process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7}d\` });
+            const newHashedRefreshToken = await bcrypt.hash(newRefreshTokenValue, 10);
+            const newRefreshTokenExpires = new Date(Date.now() + parseInt(process.env.REFRESH_TOKEN_EXPIRY_DAYS || 7) * 24 * 60 * 60 * 1000);
 
-            await prisma.user.update({
-                where: { id: user.id },
-                data: { 
-                    refreshToken: newHashedRefreshToken,
-                    refreshTokenExpires: newRefreshTokenExpires
-                }
-            });
+            await prisma.user.update({
+                where: { id: user.id },
+                data: { 
+                    refreshToken: newHashedRefreshToken,
+                    refreshTokenExpires: newRefreshTokenExpires
+                }
+            });
 
-            res.json({
-                message: 'Tokens refreshed successfully!',
-                accessToken: newAccessToken,
-                refreshToken: newRefreshTokenValue,
-            });
-        } catch (error) {
-            next(error);
-        }
-    }
-    
-    async forgotPassword(req, res, next) {
-        try {
-            const { email, phone } = req.body;
-            let whereClause = email ? { email } : { phone };
-            if(!email && !phone) return res.status(400).json({ message: 'Email or phone is required' });
+            res.json({
+                message: 'Tokens refreshed successfully!',
+                accessToken: newAccessToken,
+                refreshToken: newRefreshTokenValue,
+            });
+        } catch (error) {
+            next(error);
+        }
+    }
+    
+    async forgotPassword(req, res, next) {
+        try {
+            const { email, phone } = req.body;
+            let whereClause = email ? { email } : { phone };
+            if(!email && !phone) return res.status(400).json({ message: 'Email or phone is required' });
 
-            const user = await prisma.user.findUnique({ where: whereClause });
-            if (!user) return res.status(404).json({ message: 'User not found.' });
-            
-            const otp = generateOtp();
-            const hashedOtp = await bcrypt.hash(otp, 10);
-            const otpExpires = new Date(Date.now() + parseInt(process.env.OTP_EXPIRY_MINUTES || '10') * 60000);
-            
-            await prisma.user.update({
-                where: whereClause,
-                data: { otp: hashedOtp, otpExpires }
-            });
+            const user = await prisma.user.findUnique({ where: whereClause });
+            if (!user) return res.status(404).json({ message: 'User not found.' });
+            
+            const otp = generateOtp();
+            const hashedOtp = await bcrypt.hash(otp, 10);
+            const otpExpires = new Date(Date.now() + parseInt(process.env.OTP_EXPIRY_MINUTES || '10') * 60000);
+            
+            await prisma.user.update({
+                where: whereClause,
+                data: { otp: hashedOtp, otpExpires }
+            });
 
-            await sendOtpMessage(email ? 'email' : 'phone', email || phone, otp);
+            await sendOtpMessage(email ? 'email' : 'phone', email || phone, otp);
 
-            res.json({ message: 'OTP sent for password reset.' });
-        } catch (error) {
-            next(error);
-        }
-    }
+            res.json({ message: 'OTP sent for password reset.' });
+        } catch (error) {
+            next(error);
+        }
+    }
 
-    async resetPassword(req, res, next) {
-        try {
-            const { email, phone, otp, newPassword } = req.body;
-            let whereClause = email ? { email } : { phone };
-            if(!email && !phone) return res.status(400).json({ message: 'Email or phone is required' });
-            
-            const user = await prisma.user.findUnique({ where: whereClause });
+    async resetPassword(req, res, next) {
+        try {
+            const { email, phone, otp, newPassword } = req.body;
+            let whereClause = email ? { email } : { phone };
+            if(!email && !phone) return res.status(400).json({ message: 'Email or phone is required' });
+            
+            const user = await prisma.user.findUnique({ where: whereClause });
 
-            if (!user) return res.status(404).json({ message: 'User not found.' });
+            if (!user) return res.status(404).json({ message: 'User not found.' });
 
-            if (!user.otp || !user.otpExpires || user.otpExpires < new Date() || !(await bcrypt.compare(otp, user.otp))) {
-                return res.status(401).json({ message: 'Invalid or expired OTP.' });
-            }
+            if (!user.otp || !user.otpExpires || user.otpExpires < new Date() || !(await bcrypt.compare(otp, user.otp))) {
+                return res.status(401).json({ message: 'Invalid or expired OTP.' });
+            }
 
-            const hashedPassword = await bcrypt.hash(newPassword, 10);
+            const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-            await prisma.user.update({
-                where: whereClause,
-                data: {
-                    password: hashedPassword,
-                    otp: null,
-                    otpExpires: null
-                }
-            });
+            await prisma.user.update({
+                where: whereClause,
+                data: {
+                    password: hashedPassword,
+                    otp: null,
+                    otpExpires: null
+                }
+            });
 
-            res.json({ message: 'Password has been reset successfully.' });
-        } catch (error) {
-            next(error);
-        }
-    }
+            res.json({ message: 'Password has been reset successfully.' });
+        } catch (error) {
+            next(error);
+        }
+    }
 
-    async getProfile(req, res, next) {
-        try {
-            const user = await prisma.user.findUnique({
-                where: { id: req.user.id },
-                select: { id: true, email: true, phone: true, createdAt: true, updatedAt: true }
-            });
-            if (!user) {
-                return res.status(404).json({ message: 'User not found.' });
-            }
-            res.json({ message: 'Profile data', user });
-        } catch (error) {
-            next(error);
-        }
-    }
+    async getProfile(req, res, next) {
+        try {
+            const user = await prisma.user.findUnique({
+                where: { id: req.user.id },
+                select: { id: true, email: true, phone: true, createdAt: true, updatedAt: true }
+            });
+            if (!user) {
+                return res.status(404).json({ message: 'User not found.' });
+            }
+            res.json({ message: 'Profile data', user });
+        } catch (error) {
+            next(error);
+        }
+    }
 }
 
 module.exports = new AuthController();
@@ -2017,20 +2272,20 @@ function getAuthMiddlewareTemplate() {
   return `const jwt = require('jsonwebtoken');
 
 function authMiddleware(req, res, next) {
-  const authHeader = req.header('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'Access denied. No token provided.' });
-  }
+  const authHeader = req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ message: 'Access denied. No token provided.' });
+  }
 
-  const token = authHeader.substring(7);
+  const token = authHeader.substring(7);
 
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded; // Adds { id: ... } to the request object
-    next();
-  } catch (ex) {
-    res.status(400).json({ message: 'Invalid token.' });
-  }
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded; // Adds { id: ... } to the request object
+    next();
+  } catch (ex) {
+    res.status(400).json({ message: 'Invalid token.' });
+  }
 }
 
 module.exports = authMiddleware;
@@ -2041,65 +2296,65 @@ function getAuthValidatorTemplate() {
   return `const { body } = require('express-validator');
 
 const authValidator = {
-  register: [
-    body('email').optional().isEmail().withMessage('Invalid email format').normalizeEmail(),
-    body('phone').optional().isMobilePhone().withMessage('Invalid phone number format'),
-    body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
-    body().custom((value, { req }) => {
-      if (!req.body.email && !req.body.phone) {
-        throw new Error('Email or phone number is required');
-      }
-      return true;
-    }),
-  ],
-  sendOtp: [
-    body('email').optional().isEmail().withMessage('Invalid email format').normalizeEmail(),
-    body('phone').optional().isMobilePhone().withMessage('Invalid phone number format'),
-    body().custom((value, { req }) => {
-      if (!req.body.email && !req.body.phone) {
-        throw new Error('Email or phone number is required');
-      }
-      return true;
-    }),
-  ],
-  login: [
-    body('email').optional().isEmail().withMessage('Invalid email format').normalizeEmail(),
-    body('phone').optional().isMobilePhone().withMessage('Invalid phone number format'),
-    body('password').optional().isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
-    body('otp').optional().isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'),
-    body().custom((value, { req }) => {
-      if (!req.body.email && !req.body.phone) {
-        throw new Error('Email or phone number is required');
-      }
-       if (!req.body.password && !req.body.otp) {
-        throw new Error('Password or OTP is required');
-      }
-      return true;
-    }),
-  ],
-  refreshToken: [
-    body('refreshToken').notEmpty().withMessage('Refresh token is required'),
-  ],
-  forgotPassword: [
-    body('email').optional().isEmail().withMessage('Invalid email format').normalizeEmail(),
-    body('phone').optional().isMobilePhone().withMessage('Invalid phone number format'),
-     body().custom((value, { req }) => {
-      if (!req.body.email && !req.body.phone) {
-        throw new Error('Email or phone number is required');
-      }
-      return true;
-    }),
-  ],
-  resetPassword: [
-    body('newPassword').isLength({ min: 6 }).withMessage('New password must be at least 6 characters long'),
-    body('otp').isLength({min: 6, max: 6}).withMessage('OTP must be 6 digits'),
-    body().custom((value, { req }) => {
-      if (!req.body.email && !req.body.phone) {
-        throw new Error('Email or phone number is required');
-      }
-      return true;
-    }),
-  ],
+  register: [
+    body('email').optional().isEmail().withMessage('Invalid email format').normalizeEmail(),
+    body('phone').optional().isMobilePhone().withMessage('Invalid phone number format'),
+    body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
+    body().custom((value, { req }) => {
+      if (!req.body.email && !req.body.phone) {
+        throw new Error('Email or phone number is required');
+      }
+      return true;
+    }),
+  ],
+  sendOtp: [
+    body('email').optional().isEmail().withMessage('Invalid email format').normalizeEmail(),
+    body('phone').optional().isMobilePhone().withMessage('Invalid phone number format'),
+    body().custom((value, { req }) => {
+      if (!req.body.email && !req.body.phone) {
+        throw new Error('Email or phone number is required');
+      }
+      return true;
+    }),
+  ],
+  login: [
+    body('email').optional().isEmail().withMessage('Invalid email format').normalizeEmail(),
+    body('phone').optional().isMobilePhone().withMessage('Invalid phone number format'),
+    body('password').optional().isLength({ min: 6 }).withMessage('Password must be at least 6 characters long'),
+    body('otp').optional().isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits'),
+    body().custom((value, { req }) => {
+      if (!req.body.email && !req.body.phone) {
+        throw new Error('Email or phone number is required');
+      }
+       if (!req.body.password && !req.body.otp) {
+        throw new Error('Password or OTP is required');
+      }
+      return true;
+    }),
+  ],
+  refreshToken: [
+    body('refreshToken').notEmpty().withMessage('Refresh token is required'),
+  ],
+  forgotPassword: [
+    body('email').optional().isEmail().withMessage('Invalid email format').normalizeEmail(),
+    body('phone').optional().isMobilePhone().withMessage('Invalid phone number format'),
+     body().custom((value, { req }) => {
+      if (!req.body.email && !req.body.phone) {
+        throw new Error('Email or phone number is required');
+      }
+      return true;
+    }),
+  ],
+  resetPassword: [
+    body('newPassword').isLength({ min: 6 }).withMessage('New password must be at least 6 characters long'),
+    body('otp').isLength({min: 6, max: 6}).withMessage('OTP must be 6 digits'),
+    body().custom((value, { req }) => {
+      if (!req.body.email && !req.body.phone) {
+        throw new Error('Email or phone number is required');
+      }
+      return true;
+    }),
+  ],
 };
 
 module.exports = authValidator;
@@ -2118,134 +2373,343 @@ This project was bootstrapped from the ground up to provide a solid foundation f
 
 ## Features
 
--   **Robust Routing**: A clean and organized routing system.
--   **ORM Integration**: Choose between **Mongoose** (for MongoDB) or **Prisma** (for SQL/NoSQL databases) during project setup.
--   **Full Authentication**: Secure, token-based authentication (JWT) is built-in, including:
-    -   Registration (Email/Password or Phone/OTP)
-    -   Login (Password or OTP)
-    -   Forgot/Reset Password Flow
-    -   Access & Refresh Tokens
-    -   Protected Routes Middleware
--   **Validation**: Per-route validation using \`express-validator\`.
--   **Environment-based Configuration**: Uses \`.env\` files for easy configuration.
--   **Structured Logging & Error Handling**: Centralized error handling middleware.
--   **Automatic Scaffolding**: Use the CLI to generate models, controllers, validators, and routes.
--   **OpenAPI Generation**: Initialize an entire project's boilerplate directly from an OpenAPI (Swagger) specification file.
+-   **Robust Routing**: A clean and organized routing system.
+-   **ORM Integration**: Choose between **Mongoose** (for MongoDB) or **Prisma** (for SQL/NoSQL databases) during project setup.
+-   **Full Authentication**: Secure, token-based authentication (JWT) is built-in.
+-   **Validation**: Per-route validation using \`express-validator\`.
+-   **API Documentation**: Automatic interactive API documentation via Swagger UI at \`/api-docs\`.
+-   **Environment-based Configuration**: Uses \`.env\` files for easy configuration.
+-   **Automatic Scaffolding**: Use the CLI to generate models, controllers, validators, and routes.
+-   **OpenAPI Generation**: Initialize an entire project's boilerplate directly from an OpenAPI (Swagger) specification file.
 
 ## Prerequisites
 
--   Node.js (v16 or higher)
--   npm or yarn
--   MongoDB or a Prisma-compatible database (e.g., PostgreSQL)
+-   Node.js (v16 or higher)
+-   npm or yarn
+-   MongoDB or a Prisma-compatible database (e.g., PostgreSQL)
 
 ## Getting Started
 
+
+
 ### 2. Environment Configuration
 
-Rename the \`.env.example\` file to \`.env\` and update the variables, especially your database connection string and JWT secrets.
+Create a \`.env\` file in the project root by copying the contents of \`.env.example\` or creating it from scratch. Update the variables.
 
 \`\`\`dotenv
 # server port
 PORT=3000
 
-# Database URI (check config/database.js for details)
+# Database URI 
 # For Mongoose:
 DB_URI_DEFAULT=mongodb://127.0.0.1:27017/${appName.toLowerCase()}
 # For Prisma:
-# DATABASE_URL="postgresql://user:password@localhost:5432/${appName.toLowerCase()}?schema=public"
+DATABASE_URL="postgresql://user:password@localhost:5432/${appName.toLowerCase()}?schema=public"
 
 # --- Authentication ---
-# Secret key for JWT authentication
 JWT_SECRET=your-super-secret-key-change-me
-# Secret key for JWT Refresh Token authentication
 JWT_REFRESH_SECRET=your-refresh-super-secret-key-change-me
-REFRESH_TOKEN_EXPIRY_DAYS=7
-...
 \`\`\`
 
 ### 3. Running the Application
 
--   **Development Mode**:
-    \`\`\`bash
-    npm run dev
-    \`\`\`
-    This starts the server with \`nodemon\`, which will automatically restart on file changes.
+-   **Development Mode**:
+    \`\`\`bash
+    npm run dev
+    \`\`\`
+    This starts the server with \`nodemon\`, which will automatically restart on file changes.
 
--   **Production Mode**:
-    \`\`\`bash
-    npm start
-    \`\`\`
+-   **Production Mode**:
+    \`\`\`bash
+    npm start
+    \`\`\`
 
 The server will be running at \`http://localhost:3000\`.
 
+## API Documentation
+
+While in development mode, an interactive API documentation page is available, powered by Swagger UI.
+
+-   **URL**: [\`http://localhost:3000/api-docs\`](http://localhost:3000/api-docs)
+
+This page is automatically generated from the \`openapi.yaml\` file in the project's root directory. Any changes to this file will be reflected in the documentation.
+
 ## Project Structure
+...
+`;
+}
 
-\`\`\`
-${appName}/
-├── app/
-│   ├── controllers/    # Handles request logic
-│   ├── middleware/     # Custom Express middleware (e.g., auth)
-│   ├── models/         # Mongoose models (if using Mongoose)
-│   └── routes/         # Route definitions
-│   └── validators/     # Request validation rules
-├── config/             # Configuration files (e.g., database)
-├── prisma/             # Prisma schema and migrations (if using Prisma)
-├── public/             # Static assets
-├── .env                # Environment variables (gitignored)
-├── server.js           # Main application entry point
-├── package.json
-└── README.md
-\`\`\`
-
-## Using the CLI (Coding Express)
-
-This project is best managed with the accompanying \`codingexpress-cli\`.
-
-### Scaffolding a New Resource
-
-To create a new resource (Model, Controller, Validator, and Routes) in one command, run:
-
-\`\`\`bash
-# Run from the project root
-codingexpress make:resource Product
-\`\`\`
-
-This will create:
--   \`app/models/Product.js\` (or add to \`prisma.schema\`)
--   \`app/controllers/ProductController.js\`
--   \`app/validators/ProductValidator.js\`
--   \`app/routes/productRoutes.js\`
-
-**Important**: After creating a resource, you must register its routes in \`app/routes/index.js\`:
-
-\`\`\`javascript
-// in app/routes/index.js
-const productRoutes = require('./productRoutes.js');
-// ...
-router.use('/products', productRoutes);
-\`\`\`
-
-## API Endpoints
-
-The API is versioned under the \`/api\` prefix.
-
-### Authentication Endpoints
-
--   \`POST /api/auth/register\` - Register a new user.
--   \`POST /api/auth/login\` - Log in and receive tokens.
--   \`POST /api/auth/send-otp\` - Send an OTP for login or password reset.
--   \`POST /api/auth/refresh-token\` - Get a new access token using a refresh token.
--   \`POST /api/auth/forgot-password\`
--   \`POST /api/auth/reset-password\`
--   \`GET /api/auth/profile\` - (Protected) Get the current user's profile.
-
-### Other Resources
-
-(Add details about your other resource endpoints here as you create them)
-
----
-
-Happy Coding!
+/**
+ * UPDATED: This template now provides a comprehensive and detailed OpenAPI
+ * specification for the authentication endpoints, including request/response
+ * examples and schemas. It also fixes whitespace issues that caused parsing errors.
+ */
+function getPlaceholderOpenAPITemplate(appName) {
+  return `openapi: 3.0.3
+info:
+  title: ${appName} API
+  version: 1.0.0
+  description: The API documentation for ${appName}, featuring a complete authentication system.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        password:
+          type: string
+          format: password
+    SendOtpRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        password:
+          type: string
+          format: password
+        otp:
+          type: string
+    LoginResponse:
+      type: object
+      properties:
+        message: { type: string }
+        accessToken: { type: string }
+        refreshToken: { type: string }
+    RefreshTokenRequest:
+      type: object
+      properties:
+        refreshToken: { type: string }
+    ResetPasswordRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        otp:
+          type: string
+        newPassword:
+          type: string
+          format: password
+    SuccessResponse:
+      type: object
+      properties:
+        message: { type: string }
+    ErrorResponse:
+      type: object
+      properties:
+        message: { type: string }
+security:
+  - bearerAuth: []
+paths:
+  /api/auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register a new user
+      description: Register a new user with either an email and password OR a phone number and password.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            examples:
+              emailRegister:
+                summary: Register with email
+                value:
+                  email: "newuser@example.com"
+                  password: "strongpassword123"
+              phoneRegister:
+                summary: Register with phone
+                value:
+                  phone: "+1234567890"
+                  password: "strongpassword123"
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                message: "User registered successfully!"
+  /api/auth/send-otp:
+    post:
+      tags: [Authentication]
+      summary: Send a One-Time Password (OTP)
+      description: Sends an OTP to the user's registered email or phone for verification or login purposes.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendOtpRequest'
+            example:
+              email: "user@example.com"
+      responses:
+        '200':
+          description: OTP sent successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                message: "OTP sent to your email."
+  /api/auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login a user
+      description: Login with email/password, phone/password, or OTP. Returns access and refresh tokens.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            examples:
+              emailLogin:
+                summary: Login with Email and Password
+                value:
+                  email: "user@example.com"
+                  password: "yourpassword"
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              example:
+                message: "Login successful!"
+                accessToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                refreshToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: "Invalid credentials."
+  /api/auth/refresh-token:
+    post:
+      tags: [Authentication]
+      summary: Refresh access token
+      description: Use a valid refresh token to get a new pair of access and refresh tokens.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+            example:
+              refreshToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+      responses:
+        '200':
+          description: Tokens refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              example:
+                message: "Tokens refreshed successfully!"
+                accessToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                refreshToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        '401':
+          description: Invalid or expired refresh token
+  /api/auth/forgot-password:
+    post:
+      tags: [Authentication]
+      summary: Forgot password
+      description: Initiates the password reset process by sending an OTP to the user's email or phone.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendOtpRequest'
+            example:
+              email: "user@example.com"
+      responses:
+        '200':
+          description: OTP for password reset sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                message: "OTP sent for password reset."
+  /api/auth/reset-password:
+    post:
+      tags: [Authentication]
+      summary: Reset password
+      description: Set a new password using a valid OTP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+            example:
+              email: "user@example.com"
+              otp: "123456"
+              newPassword: "newsecurepassword123"
+      responses:
+        '200':
+          description: Password reset successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+              example:
+                message: "Password reset successfully."
+        '401':
+          description: Invalid or expired OTP
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: "Invalid or expired OTP."
+  /api/auth/profile:
+    get:
+      tags: [Authentication]
+      summary: Get user profile
+      description: Retrieves the profile of the currently authenticated user. Requires a valid Bearer token.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: User profile retrieved successfully
+        '401':
+          description: Unauthorized, token is missing or invalid
 `;
 }
 
@@ -2298,22 +2762,22 @@ function displayHelp() {
 Coding express CLI - A Laravel-like tool for Express.js
 
 Usage:
-    codingexpress <command> [arguments] [options]
+    codingexpress <command> [arguments] [options]
 
 Available Commands:
-    init [openapi_file]                 Initializes a new project. If an OpenAPI file is provided,
-                                        it scaffolds the project based on the specification.
+    init [openapi_file]                 Initializes a new project. If an OpenAPI file is provided,
+                                        it scaffolds the project based on the specification.
 
-    make:resource <Name...>             Creates a Model, Validator, Controller, and Route file.
-    make:controller <Name...>           Creates a new controller file.
-    make:model <Name...>                Creates a new model file or appends to the Prisma schema.
-    make:route <Name...>                Creates a new route file.
+    make:resource <Name...>             Creates a Model, Validator, Controller, and Route file.
+    make:controller <Name...>           Creates a new controller file.
+    make:model <Name...>                Creates a new model file or appends to the Prisma schema.
+    make:route <Name...>                Creates a new route file.
 
-    update:resource <Resource.method>   Adds a new method to an existing resource controller and route.
-                                        Example: codingexpress update:resource Product.findByCategory
+    update:resource <Resource.method>   Adds a new method to an existing resource controller and route.
+                                        Example: codingexpress update:resource Product.findByCategory
 
 Options:
-    --orm=<orm_name>                    (For make commands) Specify the ORM ('mongoose' or 'prisma').
-    --connection=<name>                 (Mongoose only) Specifies the database connection.
-  `);
+    --orm=<orm_name>                    (For make commands) Specify the ORM ('mongoose' or 'prisma').
+    --connection=<name>                 (Mongoose only) Specifies the database connection.
+  `);
 }
